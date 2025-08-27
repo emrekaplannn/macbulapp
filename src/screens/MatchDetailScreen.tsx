@@ -1,5 +1,8 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, Image, Alert, ScrollView } from 'react-native';
+import React, { useState, useCallback, useLayoutEffect } from 'react';
+import {
+  View, Text, StyleSheet, Image, Alert, ScrollView,
+  RefreshControl, ActivityIndicator, Pressable
+} from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { colors } from '../theme/colors';
@@ -7,80 +10,127 @@ import { formatDate, formatTime, formatTL } from '../utils/format';
 import { getMatchById, Match } from '../api/matches';
 import LargeButton from '../components/LargeButton';
 import Icon from 'react-native-vector-icons/Feather';
+import { useFocusEffect } from '@react-navigation/native';
+import { getWalletByUser, MOCK_USER_ID } from '../api/wallets';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MatchDetail'>;
 
-// mock pitch image (can be any public image URL for now)
 const PITCH_PLACEHOLDER =
-  'https://fs.ihu.edu.tr/siteler/spormerkezi.ihu.edu.tr/contents/6272e4951b4b3/0x0-dsc-5184-jpg.jpg';
+  'https://images.pexels.com/photos/46798/the-ball-stadion-football-the-pitch-46798.jpeg?auto=compress&cs=tinysrgb&w=1200';
 
-export default function MatchDetailScreen({ route }: Props) {
+export default function MatchDetailScreen({ route, navigation }: Props) {
   const { id } = route.params;
+
   const [match, setMatch] = useState<Match | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // header balance
+  const [balance, setBalance] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
       setError(null);
-      const data = await getMatchById(id);
-      setMatch(data);
+      const [mRes, wRes] = await Promise.allSettled([
+        getMatchById(id),
+        getWalletByUser(MOCK_USER_ID),
+      ]);
+
+      if (mRes.status === 'fulfilled') setMatch(mRes.value);
+      else throw mRes.reason ?? new Error('Failed to load match.');
+
+      if (wRes.status === 'fulfilled') setBalance(wRes.value.balance ?? 0);
+      else setBalance(null);
     } catch (e: any) {
       setError(e?.message || 'Failed to load match.');
+    } finally {
+      setLoading(false);
     }
   }, [id]);
 
-  useEffect(() => {
-    load();
+  // Load on focus (covers initial mount + when coming back)
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Pull-to-refresh
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try { await load(); } finally { setRefreshing(false); }
   }, [load]);
+
+  // Put balance into the same native header (right side)
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      // ensure the title is just "Maç Detayı"
+      title: 'Maç Detayı',
+      headerRight: () => (
+        <Pressable onPress={() => navigation.navigate('Wallet')}>
+          <Text style={styles.headerBalance}>
+            {balance === null ? '...' : formatTL(balance)}
+          </Text>
+        </Pressable>
+      ),
+    });
+  }, [navigation, balance]);
 
   const joinSolo = () => Alert.alert('Joined (mock)', 'You joined as a single player.');
   const joinGroup = () => Alert.alert('Joined (mock)', 'You joined as a group.');
   const payWithCard = () => Alert.alert('Payment (mock)', 'Card payment flow will open here.');
 
-  if (error) {
+  if (error && !match) {
     return (
       <View style={styles.center}>
-        <Text style={{ color: 'red' }}>{error}</Text>
+        <Text style={{ color: 'red', marginBottom: 12 }}>{error}</Text>
+        <Pressable onPress={load} style={styles.retry}>
+          <Text style={{ color: colors.white, fontWeight: '700' }}>Retry</Text>
+        </Pressable>
       </View>
     );
   }
 
-  if (!match) {
+  if (loading && !match) {
     return (
       <View style={styles.center}>
-        <Text>Loading…</Text>
+        <ActivityIndicator color={colors.teal} />
+        <Text style={{ marginTop: 8 }}>Loading…</Text>
       </View>
     );
   }
 
-  const filled = match.filledSlots ?? 0;
-  const total = match.totalSlots ?? 0;
+  const filled = match?.filledSlots ?? 0;
+  const total = match?.totalSlots ?? 0;
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 24 }}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={{ paddingBottom: 24 }}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.white} />
+      }
+    >
       <View style={styles.imageWrap}>
         <Image source={{ uri: PITCH_PLACEHOLDER }} style={styles.image} resizeMode="cover" />
       </View>
 
       <View style={styles.content}>
         <View style={styles.rowTop}>
-          <Text style={styles.date}>{formatDate(match.matchTimestamp)}</Text>
-          <Text style={styles.time}>{formatTime(match.matchTimestamp)}</Text>
+          <Text style={styles.date}>{formatDate(match!.matchTimestamp)}</Text>
+          <Text style={styles.time}>{formatTime(match!.matchTimestamp)}</Text>
         </View>
 
-        {/* slots directly under time */}
         <View style={styles.rowBetween}>
-            <Text style={styles.field}>{match.fieldName}</Text>
-            <View style={styles.slotsWrap}>
-                <Icon name="user" size={16} color={colors.gray600} style={styles.slotsIcon} />
-                <Text style={styles.slotsText}>{filled}/{total}</Text>
-            </View>
+          <Text style={styles.field}>{match!.fieldName}</Text>
+          <View style={styles.slotsWrap}>
+            <Icon name="user" size={16} color={colors.gray600} style={styles.slotsIcon} />
+            <Text style={styles.slotsText}>{filled}/{total}</Text>
+          </View>
         </View>
-        <Text style={styles.city}>{match.city}</Text>
+
+        <Text style={styles.city}>{match!.city}</Text>
 
         <View style={styles.divider} />
 
-        <Text style={styles.price}>{formatTL(match.pricePerUser)}</Text>
+        <Text style={styles.price}>{formatTL(match!.pricePerUser)}</Text>
 
         <LargeButton title="Bireysel Katıl" onPress={joinSolo} style={{ marginTop: 18 }} />
         <LargeButton title="Grup Katıl" onPress={joinGroup} style={{ marginTop: 12 }} />
@@ -91,20 +141,24 @@ export default function MatchDetailScreen({ route }: Props) {
 }
 
 const styles = StyleSheet.create({
+  // balance shown in the native header
+  headerBalance: { color: '#fff', fontSize: 20, fontWeight: '800', paddingHorizontal: 4 },
+
   container: { flex: 1, backgroundColor: colors.teal },
   imageWrap: {
     marginHorizontal: 16,
     marginTop: 16,
-    borderRadius: 18,
-    overflow: 'hidden', // so image corners are rounded
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    overflow: 'hidden',
   },
   image: { width: '100%', height: 220 },
   content: {
     backgroundColor: colors.white,
-    marginTop: 5,
     marginHorizontal: 16,
     marginBottom: 16,
-    borderRadius: 18,
+    borderBottomLeftRadius: 18,
+    borderBottomRightRadius: 18,
     padding: 16,
   },
   rowTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
@@ -124,5 +178,12 @@ const styles = StyleSheet.create({
   city: { color: '#555', marginTop: 6, marginBottom: 8, fontSize: 16 },
   divider: { height: 1, backgroundColor: '#E9E9E9', marginVertical: 10 },
   price: { fontSize: 20, fontWeight: '800', marginBottom: 8 },
+
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  retry: {
+    backgroundColor: colors.teal,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
 });

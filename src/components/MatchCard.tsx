@@ -46,7 +46,7 @@ export default function MatchCard({ match, onJoin, onPress }: Props) {
 }
 
 const styles = StyleSheet.create({
-  card: { backgroundColor: colors.white, borderRadius: 16, padding: 16, marginBottom: 12, elevation: 2 },
+  card: { backgroundColor: colors.white, borderRadius: 16, padding: 16, marginBottom: 12, elevation:21 },
   rowTop: { flexDirection: 'row', justifyContent: 'space-between' },
   date: { fontSize: 16, fontWeight: '700' },
   time: { fontSize: 16, fontWeight: '700' },
