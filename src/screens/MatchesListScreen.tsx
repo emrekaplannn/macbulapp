@@ -1,21 +1,28 @@
-import React, { useCallback, useState, useMemo } from 'react';
-import { View, Text, FlatList, StyleSheet, RefreshControl, Alert } from 'react-native';
+// src/screens/MatchesListScreen.tsx
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  View, Text, FlatList, StyleSheet,
+  RefreshControl, Alert, Pressable
+} from 'react-native';
 import { colors } from '../theme/colors';
 import { listMatches, Match } from '../api/matches';
 import MatchCard from '../components/MatchCard';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { RootStackParamList } from '../navigation/AppNavigator';
+import { HomeStackParamList } from '../navigation/AppNavigator';
 import { formatTL } from '../utils/format';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, DrawerActions } from '@react-navigation/native';
 import { getWalletByUser, MOCK_USER_ID } from '../api/wallets';
+import Icon from 'react-native-vector-icons/Feather';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'MatchesList'>;
+type Props = NativeStackScreenProps<HomeStackParamList, 'MatchesList'>;
 
 export default function MatchesListScreen({ navigation }: Props) {
   const [items, setItems] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // fetched balance of mock user
   const [balance, setBalance] = useState<number | null>(null);
 
   const load = useCallback(async () => {
@@ -23,74 +30,67 @@ export default function MatchesListScreen({ navigation }: Props) {
       setError(null);
       setLoading(true);
 
-      const results = await Promise.allSettled([
+      const [matches, wallet] = await Promise.all([
         listMatches(),
         getWalletByUser(MOCK_USER_ID),
       ]);
 
-      // matches
-      const matchesRes = results[0];
-      if (matchesRes.status === 'fulfilled') {
-        setItems(matchesRes.value);
-      } else {
-        // if matches fail, surface an error
-        setItems([]);
-        setError(matchesRes.reason?.message || 'Failed to load matches.');
-      }
+      setItems(matches);
+      setBalance(wallet.balance ?? 0);
 
-      // wallet
-      const walletRes = results[1];
-      if (walletRes.status === 'fulfilled') {
-        setBalance(walletRes.value.balance ?? 0);
-      } else {
-        // if wallet fails, just show "..."
-        setBalance(null);
-      }
+    } catch (e: any) {
+      setError(e?.message || 'Failed to load data.');
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // load on mount + when screen regains focus
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useEffect(() => { load(); }, [load]);
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    try { await load(); }
-    catch (e: any) { Alert.alert('Error', e?.message || 'Failed to refresh.'); }
-    finally { setRefreshing(false); }
-  }, [load]);
-
-  const handleJoin = useCallback((id: string) => {
-    Alert.alert('Joined!', `You have joined match ${id} (mock).`);
-  }, []);
-
-  const openDetail = useCallback((id: string) => {
-    navigation.navigate('MatchDetail', { id });
-  }, [navigation]);
-
-  const renderItem = useCallback(
-    ({ item }: { item: Match }) => (
-      <MatchCard match={item} onJoin={handleJoin} onPress={openDetail} />
-    ),
-    [handleJoin, openDetail]
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
   );
 
-  const keyExtractor = useCallback((m: Match) => m.id, []);
+  const onRefresh = async () => {
+    setRefreshing(true);
+    try { await load(); }
+    catch (e: any) {
+      Alert.alert('Error', e?.message || 'Failed to refresh.');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const handleJoin = (id: string) => {
+    Alert.alert('Joined!', `You have joined match ${id} (mock).`);
+  };
+
+  const openDetail = (id: string) => navigation.navigate('MatchDetail', { id });
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
+        {/* Left: drawer toggle button */}
+        <Pressable onPress={() => navigation.dispatch(DrawerActions.toggleDrawer())}>
+          <Icon name="menu" size={26} color="#fff" />
+        </Pressable>
+
+        {/* Center: brand */}
         <Text style={styles.brand}>MaçBul</Text>
-        <Text style={styles.balance} onPress={() => navigation.navigate('Wallet')}>
-          {balance === null ? '...' : formatTL(balance)}
-        </Text>
+
+        {/* Right: balance */}
+        <Pressable onPress={() => navigation.navigate('Wallet' as never)}>
+          <Text style={styles.balance}>
+            {balance === null ? '...' : formatTL(balance)}
+          </Text>
+        </Pressable>
       </View>
 
       <FlatList
         data={items}
-        keyExtractor={keyExtractor}
-        renderItem={renderItem}
+        keyExtractor={(m) => m.id}
         contentContainerStyle={styles.listContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         ListEmptyComponent={
@@ -102,6 +102,9 @@ export default function MatchesListScreen({ navigation }: Props) {
             <Text style={styles.subtle}>No matches yet.</Text>
           )
         }
+        renderItem={({ item }) => (
+          <MatchCard match={item} onJoin={handleJoin} onPress={openDetail} />
+        )}
       />
     </View>
   );
@@ -113,12 +116,12 @@ const styles = StyleSheet.create({
     height: 64,
     backgroundColor: colors.teal,
     paddingHorizontal: 16,
-    alignItems: 'center',
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
   },
-  brand: { color: colors.white, fontSize: 28, fontWeight: '900' },
-  balance: { color: colors.white, fontSize: 21, fontWeight: '800' },
+  brand: { color: colors.white, fontSize: 23, fontWeight: '800' },
+  balance: { color: colors.white, fontSize: 18, fontWeight: '800' },
   listContent: { padding: 16 },
   subtle: { textAlign: 'center', color: colors.gray600, marginTop: 24 },
 });

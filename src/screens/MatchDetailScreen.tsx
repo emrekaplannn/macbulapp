@@ -4,7 +4,7 @@ import {
   RefreshControl, ActivityIndicator, Pressable
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { RootStackParamList } from '../navigation/AppNavigator';
+import { HomeStackParamList } from '../navigation/AppNavigator'; // <-- UPDATED TYPE
 import { colors } from '../theme/colors';
 import { formatDate, formatTime, formatTL } from '../utils/format';
 import { getMatchById, Match } from '../api/matches';
@@ -13,7 +13,7 @@ import Icon from 'react-native-vector-icons/Feather';
 import { useFocusEffect } from '@react-navigation/native';
 import { getWalletByUser, MOCK_USER_ID } from '../api/wallets';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'MatchDetail'>;
+type Props = NativeStackScreenProps<HomeStackParamList, 'MatchDetail'>; // <-- UPDATED
 
 const PITCH_PLACEHOLDER =
   'https://images.pexels.com/photos/46798/the-ball-stadion-football-the-pitch-46798.jpeg?auto=compress&cs=tinysrgb&w=1200';
@@ -32,6 +32,8 @@ export default function MatchDetailScreen({ route, navigation }: Props) {
   const load = useCallback(async () => {
     try {
       setError(null);
+      setLoading(true);
+
       const [mRes, wRes] = await Promise.allSettled([
         getMatchById(id),
         getWalletByUser(MOCK_USER_ID),
@@ -61,10 +63,9 @@ export default function MatchDetailScreen({ route, navigation }: Props) {
   // Put balance into the same native header (right side)
   useLayoutEffect(() => {
     navigation.setOptions({
-      // ensure the title is just "Maç Detayı"
       title: 'Maç Detayı',
       headerRight: () => (
-        <Pressable onPress={() => navigation.navigate('Wallet')}>
+        <Pressable onPress={() => navigation.navigate('Wallet' as never)}>
           <Text style={styles.headerBalance}>
             {balance === null ? '...' : formatTL(balance)}
           </Text>
@@ -97,8 +98,13 @@ export default function MatchDetailScreen({ route, navigation }: Props) {
     );
   }
 
+  // Guards so we don't use non-null assertions
+  const ts = match?.matchTimestamp ?? Date.now();
   const filled = match?.filledSlots ?? 0;
-  const total = match?.totalSlots ?? 0;
+  const total  = match?.totalSlots ?? 0;
+  const field  = match?.fieldName ?? '';
+  const city   = match?.city ?? '';
+  const price  = match?.pricePerUser ?? 0;
 
   return (
     <ScrollView
@@ -114,23 +120,23 @@ export default function MatchDetailScreen({ route, navigation }: Props) {
 
       <View style={styles.content}>
         <View style={styles.rowTop}>
-          <Text style={styles.date}>{formatDate(match!.matchTimestamp)}</Text>
-          <Text style={styles.time}>{formatTime(match!.matchTimestamp)}</Text>
+          <Text style={styles.date}>{formatDate(ts)}</Text>
+          <Text style={styles.time}>{formatTime(ts)}</Text>
         </View>
 
         <View style={styles.rowBetween}>
-          <Text style={styles.field}>{match!.fieldName}</Text>
+          <Text style={styles.field}>{field}</Text>
           <View style={styles.slotsWrap}>
             <Icon name="user" size={16} color={colors.gray600} style={styles.slotsIcon} />
             <Text style={styles.slotsText}>{filled}/{total}</Text>
           </View>
         </View>
 
-        <Text style={styles.city}>{match!.city}</Text>
+        <Text style={styles.city}>{city}</Text>
 
         <View style={styles.divider} />
 
-        <Text style={styles.price}>{formatTL(match!.pricePerUser)}</Text>
+        <Text style={styles.price}>{formatTL(price)}</Text>
 
         <LargeButton title="Bireysel Katıl" onPress={joinSolo} style={{ marginTop: 18 }} />
         <LargeButton title="Grup Katıl" onPress={joinGroup} style={{ marginTop: 12 }} />
@@ -141,7 +147,6 @@ export default function MatchDetailScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  // balance shown in the native header
   headerBalance: { color: '#fff', fontSize: 20, fontWeight: '800', paddingHorizontal: 4 },
 
   container: { flex: 1, backgroundColor: colors.teal },
