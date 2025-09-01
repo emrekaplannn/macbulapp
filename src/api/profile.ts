@@ -22,23 +22,25 @@ export async function updateUserProfile(
 }
 
 // If you expose referral via its own table/endpoint:
-// If you expose referral via its own table/endpoint:
+export type ReferralCodeStatus = 'ACTIVE' | 'INACTIVE';
+
 export type ReferralCodeDto = {
   id: string;
   userId: string;
   code: string;
+  status: ReferralCodeStatus;
   createdAt: number;
 };
 
 export async function getReferralCode(userId: string): Promise<ReferralCodeDto | null> {
   try {
-    const r = await api.get(`/referral-codes/user/${userId}`);
+    const r = await api.get(`/referral-codes/user-actives/${userId}`);
 
     // backend sends array of referral codes
-    const arr = r.data as ReferralCodeDto[];
+    const arr = r.data as ReferralCodeDto;
 
     // return first element if available, otherwise null
-    return arr.length > 0 ? arr[0] : null;
+    return arr;
   } catch (e) {
     console.warn("Failed to fetch referral code", e);
     return null; // okay to be empty

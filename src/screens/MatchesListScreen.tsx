@@ -71,23 +71,6 @@ export default function MatchesListScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
-        {/* Left: drawer toggle button */}
-        <Pressable onPress={() => navigation.dispatch(DrawerActions.toggleDrawer())}>
-          <Icon name="menu" size={26} color="#fff" />
-        </Pressable>
-
-        {/* Center: brand */}
-        <Text style={styles.brand}>MaçBul</Text>
-
-        {/* Right: balance */}
-        <Pressable onPress={() => navigation.navigate('Wallet' as never)}>
-          <Text style={styles.balance}>
-            {balance === null ? '...' : formatTL(balance)}
-          </Text>
-        </Pressable>
-      </View>
-
       <FlatList
         data={items}
         keyExtractor={(m) => m.id}
