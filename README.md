@@ -24,7 +24,7 @@
 Thus, “MaçBul” offers rapid prototyping and a scalable infrastructure while making it easy for users to socially participate in indoor soccer matches.
 
 
-<img src="images/screen1.png" alt="Açıklama" width="200" />
+<img src="https://github.com/emrekaplannn/macbul/blob/main/images/screen1.png" alt="Açıklama" width="200" />
 
 
 <img src="images/screen2.png" alt="Açıklama" width="200" />
