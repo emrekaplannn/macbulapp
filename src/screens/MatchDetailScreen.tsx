@@ -1,10 +1,10 @@
-import React, { useState, useCallback, useLayoutEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, Image, Alert, ScrollView,
   RefreshControl, ActivityIndicator, Pressable
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { HomeStackParamList } from '../navigation/AppNavigator'; // <-- UPDATED TYPE
+import { HomeStackParamList } from '../navigation/AppNavigator';
 import { colors } from '../theme/colors';
 import { formatDate, formatTime, formatTL } from '../utils/format';
 import { getMatchById, Match } from '../api/matches';
@@ -12,13 +12,18 @@ import LargeButton from '../components/LargeButton';
 import Icon from 'react-native-vector-icons/Feather';
 import { useFocusEffect } from '@react-navigation/native';
 import { getWalletByUser, MOCK_USER_ID } from '../api/wallets';
+import { useWalletStore } from '../state/walletStore';
 
-type Props = NativeStackScreenProps<HomeStackParamList, 'MatchDetail'>; // <-- UPDATED
+type Props = NativeStackScreenProps<HomeStackParamList, 'MatchDetail'>;
 
 const PITCH_PLACEHOLDER =
   'https://images.pexels.com/photos/46798/the-ball-stadion-football-the-pitch-46798.jpeg?auto=compress&cs=tinysrgb&w=1200';
 
-export default function MatchDetailScreen({ route, navigation }: Props) {
+const getErrMsg = (e: unknown) =>
+  (typeof e === 'object' && e && 'message' in e && String((e as any).message)) ||
+  (typeof e === 'string' ? e : 'Beklenmeyen bir hata oluştu.');
+
+export default function MatchDetailScreen({ route }: Props) {
   const { id } = route.params;
 
   const [match, setMatch] = useState<Match | null>(null);
@@ -26,53 +31,54 @@ export default function MatchDetailScreen({ route, navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // header balance
-  const [balance, setBalance] = useState<number | null>(null);
+  // use store setter without creating a dependency
+  const setGlobalBalance = useWalletStore.getState().setBalance;
+
+  // stale/unmount guards
+  const reqIdRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   const load = useCallback(async () => {
-    try {
-      setError(null);
-      setLoading(true);
+    const reqId = ++reqIdRef.current;
+    setLoading(true);
+    setError(null);
 
+    try {
       const [mRes, wRes] = await Promise.allSettled([
         getMatchById(id),
         getWalletByUser(MOCK_USER_ID),
       ]);
 
-      if (mRes.status === 'fulfilled') setMatch(mRes.value);
-      else throw mRes.reason ?? new Error('Failed to load match.');
+      if (!mountedRef.current || reqId !== reqIdRef.current) return;
 
-      if (wRes.status === 'fulfilled') setBalance(wRes.value.balance ?? 0);
-      else setBalance(null);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to load match.');
+      if (mRes.status === 'fulfilled') {
+        setMatch(mRes.value);
+      } else {
+        setError(`Maç bilgisi alınamadı: ${getErrMsg(mRes.reason)}`);
+      }
+
+      if (wRes.status === 'fulfilled') {
+        const b = Number.isFinite(wRes.value?.balance) ? wRes.value.balance : 0;
+        setGlobalBalance(b); // ✅ updates shared header balance
+      } else {
+        setGlobalBalance(null);
+      }
+    } catch (e) {
+      if (!mountedRef.current || reqId !== reqIdRef.current) return;
+      setError(getErrMsg(e));
+      setGlobalBalance(null);
     } finally {
-      setLoading(false);
+      if (mountedRef.current && reqId === reqIdRef.current) setLoading(false);
     }
-  }, [id]);
+  }, [id, setGlobalBalance]);
 
-  // Load on focus (covers initial mount + when coming back)
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  // Pull-to-refresh
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try { await load(); } finally { setRefreshing(false); }
   }, [load]);
-
-  // Put balance into the same native header (right side)
-  useLayoutEffect(() => {
-    navigation.setOptions({
-      title: 'Maç Detayı',
-      headerRight: () => (
-        <Pressable onPress={() => navigation.navigate('Wallet' as never)}>
-          <Text style={styles.headerBalance}>
-            {balance === null ? '...' : formatTL(balance)}
-          </Text>
-        </Pressable>
-      ),
-    });
-  }, [navigation, balance]);
 
   const joinSolo = () => Alert.alert('Joined (mock)', 'You joined as a single player.');
   const joinGroup = () => Alert.alert('Joined (mock)', 'You joined as a group.');
@@ -98,7 +104,7 @@ export default function MatchDetailScreen({ route, navigation }: Props) {
     );
   }
 
-  // Guards so we don't use non-null assertions
+  // Safe guards
   const ts = match?.matchTimestamp ?? Date.now();
   const filled = match?.filledSlots ?? 0;
   const total  = match?.totalSlots ?? 0;
@@ -147,8 +153,6 @@ export default function MatchDetailScreen({ route, navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  headerBalance: { color: '#fff', fontSize: 20, fontWeight: '800', paddingHorizontal: 4 },
-
   container: { flex: 1, backgroundColor: colors.teal },
   imageWrap: {
     marginHorizontal: 16,

@@ -11,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, CommonActions  } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { colors } from '../theme/colors';
@@ -24,6 +24,7 @@ import {
 import { getWalletByUser, MOCK_USER_ID } from '../api/wallets';
 import { ProfileStackParamList } from '../navigation/AppNavigator';
 import { useWalletStore } from '../state/walletStore';
+import { useProfileStore } from '../state/profileStore';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'Profile'>;
 
@@ -65,6 +66,8 @@ export default function ProfileScreen({ navigation }: Props) {
       // Profile
       if (pRes.status === 'fulfilled') {
         setProfile(pRes.value);
+        const { fullName, position, avatarUrl } = pRes.value || {};
+        useProfileStore.getState().setProfile({ fullName: fullName ?? null, position: position ?? null, avatarUrl: avatarUrl ?? null });
       } else {
         console.error('UserProfile failed:', pRes.reason);
         setErrors((s) => ({ ...s, profile: `Profil bilgileri alınamadı: ${getErrMsg(pRes.reason)}` }));
@@ -141,7 +144,39 @@ export default function ProfileScreen({ navigation }: Props) {
     Alert.alert('Yakında', 'Bildirim tercihleri ekranı daha sonra eklenecek.');
   const openKvkk = () => Alert.alert('KVKK', 'KVKK metni burada gösterilecek.');
   const changePassword = () => Alert.alert('Şifre Değiştir', 'Akış daha sonra eklenecek.');
-  const logout = () => Alert.alert('Çıkış', 'Mock logout. Auth en sonda eklenecek.');
+  const logout = () => {
+  Alert.alert('Çıkış', 'Hesabınızdan çıkış yapmak istiyor musunuz?', [
+    { text: 'İptal', style: 'cancel' },
+    {
+      text: 'Evet',
+      style: 'destructive',
+      onPress: () => {
+        // clear global stores
+        useWalletStore.getState().clear?.();
+        useProfileStore.getState().clear?.();
+
+        // jump to Login by resetting the Root stack (ProfileStack -> Drawer -> RootStack)
+        const rootNav = navigation.getParent()?.getParent(); // ProfileStack -> Drawer -> Root
+        if (rootNav) {
+          rootNav.dispatch(
+            CommonActions.reset({
+              index: 0,
+              routes: [{ name: 'Login' as never }],
+            })
+          );
+        } else {
+          // fallback (in case hierarchy changes)
+          navigation.dispatch(
+            CommonActions.reset({
+              index: 0,
+              routes: [{ name: 'Login' as never }],
+            })
+          );
+        }
+      },
+    },
+  ]);
+};
 
   const avatar =
     profile?.avatarUrl ||

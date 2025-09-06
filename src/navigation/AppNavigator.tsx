@@ -3,6 +3,8 @@ import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator } from '@react-navigation/drawer';
+import Feather from 'react-native-vector-icons/Feather';
+
 import { colors } from '../theme/colors';
 
 import MatchesListScreen from '../screens/MatchesListScreen';
@@ -10,12 +12,18 @@ import MatchDetailScreen from '../screens/MatchDetailScreen';
 import WalletScreen from '../screens/WalletScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import SupportScreen from '../screens/SupportScreen';
+import LoginScreen from '../screens/LoginScreen';
+import RegisterScreen from '../screens/RegisterScreen';
 
+import CustomDrawerContent from './CustomDrawerContent';
 import { appHeaderOptions } from './headerOptions';
 import ProfileWalletRight from './ProfileWalletRight';
 
 /** ---------- Home Stack ---------- */
-export type HomeStackParamList = { MatchesList: undefined; MatchDetail: { id: string } };
+export type HomeStackParamList = {
+  MatchesList: undefined;
+  MatchDetail: { id: string };
+};
 const HomeStack = createNativeStackNavigator<HomeStackParamList>();
 
 function HomeStackNavigator() {
@@ -49,6 +57,7 @@ function HomeStackNavigator() {
 /** ---------- Wallet Stack ---------- */
 export type WalletStackParamList = { Wallet: undefined };
 const WalletStack = createNativeStackNavigator<WalletStackParamList>();
+
 function WalletStackNavigator() {
   return (
     <WalletStack.Navigator>
@@ -74,11 +83,10 @@ function ProfileStackNavigator() {
       <ProfileStack.Screen
         name="Profile"
         component={ProfileScreen}
-        options={({ route }) =>
+        options={() =>
           appHeaderOptions({
             title: 'Profil',
             mode: 'drawer',
-            // if you want the balance here:
             right: <ProfileWalletRight />,
           })
         }
@@ -98,7 +106,7 @@ function ProfileStackNavigator() {
   );
 }
 
-/** ---------- Drawer (wrap stacks only) ---------- */
+/** ---------- Drawer (App shell) ---------- */
 export type AppDrawerParamList = {
   HomeStack: undefined;
   WalletStack: undefined;
@@ -106,22 +114,64 @@ export type AppDrawerParamList = {
 };
 const Drawer = createDrawerNavigator<AppDrawerParamList>();
 
+function AppShell() {
+  return (
+    <Drawer.Navigator
+      drawerContent={(props) => <CustomDrawerContent {...props} />}
+      screenOptions={{
+        headerShown: false,
+        drawerStyle: { backgroundColor: '#0097A7', width: 280 },
+        drawerActiveTintColor: 'rgba(0, 0, 0, 1)',
+        drawerInactiveTintColor: '#fff',
+        drawerLabelStyle: { fontWeight: '700', fontSize: 15 },
+        drawerItemStyle: { borderRadius: 12, marginHorizontal: 0, paddingHorizontal: 6 },
+        drawerActiveBackgroundColor: '#22B9C9',
+      }}
+    >
+      <Drawer.Screen
+        name="HomeStack"
+        component={HomeStackNavigator}
+        options={{
+          title: 'Maçlar',
+          drawerIcon: ({ color, size }) => <Feather name="home" size={size ?? 20} color={color} />,
+        }}
+      />
+      <Drawer.Screen
+        name="WalletStack"
+        component={WalletStackNavigator}
+        options={{
+          title: 'Cüzdan',
+          drawerIcon: ({ color, size }) => <Feather name="credit-card" size={size ?? 20} color={color} />,
+        }}
+      />
+      <Drawer.Screen
+        name="ProfileStack"
+        component={ProfileStackNavigator}
+        options={{
+          title: 'Profil',
+          drawerIcon: ({ color, size }) => <Feather name="user" size={size ?? 20} color={color} />,
+        }}
+      />
+    </Drawer.Navigator>
+  );
+}
+
+/** ---------- Root (Login/Register -> App) ---------- */
+export type RootStackParamList = {
+  Login: undefined;
+  Register: undefined;
+  App: undefined;
+};
+const RootStack = createNativeStackNavigator<RootStackParamList>();
+
 export default function AppNavigator() {
   return (
     <NavigationContainer>
-      <Drawer.Navigator
-        screenOptions={{
-          headerShown: false, // always false; our stacks provide the header
-          drawerStyle: { backgroundColor: colors.teal, width: 260 },
-          drawerActiveTintColor: '#fff',
-          drawerInactiveTintColor: '#fff',
-          drawerLabelStyle: { fontWeight: '700' },
-        }}
-      >
-        <Drawer.Screen name="HomeStack" component={HomeStackNavigator} options={{ title: 'Maçlar' }} />
-        <Drawer.Screen name="WalletStack" component={WalletStackNavigator} options={{ title: 'Cüzdan' }} />
-        <Drawer.Screen name="ProfileStack" component={ProfileStackNavigator} options={{ title: 'Profil' }} />
-      </Drawer.Navigator>
+      <RootStack.Navigator screenOptions={{ headerShown: false }}>
+        <RootStack.Screen name="Login" component={LoginScreen} />
+        <RootStack.Screen name="Register" component={RegisterScreen} />
+        <RootStack.Screen name="App" component={AppShell} />
+      </RootStack.Navigator>
     </NavigationContainer>
   );
 }
