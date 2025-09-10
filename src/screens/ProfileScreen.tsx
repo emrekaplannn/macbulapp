@@ -1,3 +1,4 @@
+// src/screens/ProfileScreen.tsx
 import React, { useCallback, useState } from 'react';
 import {
   Alert,
@@ -11,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
-import { useFocusEffect, CommonActions  } from '@react-navigation/native';
+import { useFocusEffect, CommonActions } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { colors } from '../theme/colors';
@@ -21,10 +22,12 @@ import {
   type ReferralCodeDto,
   type UserProfile,
 } from '../api/profile';
-import { getWalletByUser, MOCK_USER_ID } from '../api/wallets';
+import { getWalletByUser } from '../api/wallets';
 import { ProfileStackParamList } from '../navigation/AppNavigator';
 import { useWalletStore } from '../state/walletStore';
 import { useProfileStore } from '../state/profileStore';
+import { useAuthStore } from '../state/authStore';
+import axios from 'axios';
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'Profile'>;
 
@@ -34,14 +37,14 @@ type ErrorState = {
   wallet?: string;
 };
 
+const LOG = (...a: any[]) => console.log('[Profile]', ...a);
 const getErrMsg = (e: unknown) =>
+  (axios.isAxiosError(e) && (e.response?.data?.message || e.message)) ||
   (typeof e === 'object' && e && 'message' in e && String((e as any).message)) ||
   (typeof e === 'string' ? e : 'Beklenmeyen bir hata oluştu.');
 
 export default function ProfileScreen({ navigation }: Props) {
-  const userId = MOCK_USER_ID; // mock until auth
   const setGlobalBalance = useWalletStore((s) => s.setBalance);
-
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -49,16 +52,65 @@ export default function ProfileScreen({ navigation }: Props) {
   const [twoFA, setTwoFA] = useState(false);
   const [errors, setErrors] = useState<ErrorState>({});
 
+  const accessToken  = useAuthStore((s) => s.accessToken);
+  const clearAuth    = useAuthStore((s) => s.clearAuth);
+
+  const handleAuthFail = useCallback((e: unknown, from?: string) => {
+    if (axios.isAxiosError(e)) {
+      const code = e.response?.status;
+      const url  = from || e.config?.url || '';
+      console.log('[Profile][AUTH?]', { code, url });
+
+      // 401: her zaman oturum düşür
+      if (code === 401) {
+        console.log('[Profile] 401 -> clearAuth + reset(Login)');
+        clearAuth();
+        const rootNav = navigation.getParent()?.getParent(); // ProfileStack -> Drawer -> Root
+        (rootNav ?? navigation).dispatch(
+          CommonActions.reset({ index: 0, routes: [{ name: 'Login' as never }] })
+        );
+        return true;
+      }
+
+      // 403: me endpointlerinde auth hatası say
+      const needsAuth =
+        url.includes('/wallets') ||
+        url.includes('/transactions') ||
+        url.includes('/user-profiles');
+      if (code === 403 && needsAuth) {
+        console.log('[Profile] 403 protected -> clearAuth + reset(Login)');
+        clearAuth();
+        const rootNav = navigation.getParent()?.getParent();
+        (rootNav ?? navigation).dispatch(
+          CommonActions.reset({ index: 0, routes: [{ name: 'Login' as never }] })
+        );
+        return true;
+      }
+    }
+    return false;
+  }, [clearAuth, navigation]);
+
   const load = useCallback(async () => {
     setLoading(true);
-    setErrors({}); // reset previous errors
-    let alive = true; // guard against setState after unmount
+    setErrors({});
+    let alive = true;
+
+    // token yoksa direkt Login
+    if (!accessToken) {
+      LOG('no accessToken -> reset(Login)');
+      const rootNav = navigation.getParent()?.getParent();
+      (rootNav ?? navigation).dispatch(
+        CommonActions.reset({ index: 0, routes: [{ name: 'Login' as never }] })
+      );
+      return;
+    }
 
     try {
+      LOG('fetching: profile/me, referral, wallet/me');
       const [pRes, rRes, wRes] = await Promise.allSettled([
-        getUserProfile(userId),
-        getReferralCode(userId),
-        getWalletByUser(userId),
+        getUserProfile(),
+        getReferralCode(),
+        getWalletByUser(),
       ]);
 
       if (!alive) return;
@@ -67,38 +119,54 @@ export default function ProfileScreen({ navigation }: Props) {
       if (pRes.status === 'fulfilled') {
         setProfile(pRes.value);
         const { fullName, position, avatarUrl } = pRes.value || {};
-        useProfileStore.getState().setProfile({ fullName: fullName ?? null, position: position ?? null, avatarUrl: avatarUrl ?? null });
+        useProfileStore
+          .getState()
+          .setProfile({ fullName: fullName ?? null, position: position ?? null, avatarUrl: avatarUrl ?? null });
       } else {
-        console.error('UserProfile failed:', pRes.reason);
-        setErrors((s) => ({ ...s, profile: `Profil bilgileri alınamadı: ${getErrMsg(pRes.reason)}` }));
+        if (!handleAuthFail(pRes.reason, '/user-profiles/me')) {
+          console.error('UserProfile failed:', pRes.reason);
+          setErrors((s) => ({ ...s, profile: `Profil bilgileri alınamadı: ${getErrMsg(pRes.reason)}` }));
+        } else {
+          return; // auth fail durumda devam etmeye gerek yok
+        }
       }
 
       // Referral
       if (rRes.status === 'fulfilled') {
         setRefCode(rRes.value ?? null);
       } else {
-        console.warn('Referral code failed:', rRes.reason);
-        setErrors((s) => ({ ...s, referral: `Referans kodu alınamadı: ${getErrMsg(rRes.reason)}` }));
+        if (!handleAuthFail(rRes.reason, '/referral-codes/user-actives')) {
+          console.warn('Referral code failed:', rRes.reason);
+          setErrors((s) => ({ ...s, referral: `Referans kodu alınamadı: ${getErrMsg(rRes.reason)}` }));
+        } else {
+          return;
+        }
       }
 
       // Wallet
       if (wRes.status === 'fulfilled') {
         const raw = wRes.value?.balance;
         const b = typeof raw === 'number' && isFinite(raw) ? raw : 0;
-        setGlobalBalance(b); // ✅ header updates everywhere
+        setGlobalBalance(b);
       } else {
-        console.warn('Wallet failed:', wRes.reason);
-        setGlobalBalance(null);
-        setErrors((s) => ({ ...s, wallet: `Cüzdan bilgisi alınamadı: ${getErrMsg(wRes.reason)}` }));
+        if (!handleAuthFail(wRes.reason, '/wallets/user')) {
+          console.warn('Wallet failed:', wRes.reason);
+          setGlobalBalance(null);
+          setErrors((s) => ({ ...s, wallet: `Cüzdan bilgisi alınamadı: ${getErrMsg(wRes.reason)}` }));
+        } else {
+          return;
+        }
       }
     } catch (e) {
-      console.error(e);
-      setErrors({
-        profile: `Yükleme başarısız: ${getErrMsg(e)}`,
-        referral: `Yükleme başarısız: ${getErrMsg(e)}`,
-        wallet: `Yükleme başarısız: ${getErrMsg(e)}`,
-      });
-      setGlobalBalance(null);
+      if (!handleAuthFail(e)) {
+        console.error(e);
+        setErrors({
+          profile: `Yükleme başarısız: ${getErrMsg(e)}`,
+          referral: `Yükleme başarısız: ${getErrMsg(e)}`,
+          wallet: `Yükleme başarısız: ${getErrMsg(e)}`,
+        });
+        setGlobalBalance(null);
+      }
     } finally {
       if (alive) setLoading(false);
     }
@@ -106,7 +174,7 @@ export default function ProfileScreen({ navigation }: Props) {
     return () => {
       alive = false;
     };
-  }, [userId, setGlobalBalance]);
+  }, [accessToken, handleAuthFail, navigation, setGlobalBalance]);
 
   useFocusEffect(
     useCallback(() => {
@@ -114,7 +182,6 @@ export default function ProfileScreen({ navigation }: Props) {
       (async () => {
         cleanup = await load();
       })();
-
       return () => {
         if (typeof cleanup === 'function') cleanup();
       };
@@ -123,11 +190,7 @@ export default function ProfileScreen({ navigation }: Props) {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    try {
-      await load();
-    } finally {
-      setRefreshing(false);
-    }
+    try { await load(); } finally { setRefreshing(false); }
   }, [load]);
 
   const copyCode = async () => {
@@ -144,39 +207,28 @@ export default function ProfileScreen({ navigation }: Props) {
     Alert.alert('Yakında', 'Bildirim tercihleri ekranı daha sonra eklenecek.');
   const openKvkk = () => Alert.alert('KVKK', 'KVKK metni burada gösterilecek.');
   const changePassword = () => Alert.alert('Şifre Değiştir', 'Akış daha sonra eklenecek.');
-  const logout = () => {
-  Alert.alert('Çıkış', 'Hesabınızdan çıkış yapmak istiyor musunuz?', [
-    { text: 'İptal', style: 'cancel' },
-    {
-      text: 'Evet',
-      style: 'destructive',
-      onPress: () => {
-        // clear global stores
-        useWalletStore.getState().clear?.();
-        useProfileStore.getState().clear?.();
 
-        // jump to Login by resetting the Root stack (ProfileStack -> Drawer -> RootStack)
-        const rootNav = navigation.getParent()?.getParent(); // ProfileStack -> Drawer -> Root
-        if (rootNav) {
-          rootNav.dispatch(
-            CommonActions.reset({
-              index: 0,
-              routes: [{ name: 'Login' as never }],
-            })
+  const logout = () => {
+    Alert.alert('Çıkış', 'Hesabınızdan çıkış yapmak istiyor musunuz?', [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Evet',
+        style: 'destructive',
+        onPress: () => {
+          // global store’ları temizle
+          useWalletStore.getState().clear?.();
+          useProfileStore.getState().clear?.();
+          useAuthStore.getState().clearAuth(); // 🔑 auth temizle
+
+          // Root stack'i Login'e sıfırla
+          const rootNav = navigation.getParent()?.getParent();
+          (rootNav ?? navigation).dispatch(
+            CommonActions.reset({ index: 0, routes: [{ name: 'Login' as never }] })
           );
-        } else {
-          // fallback (in case hierarchy changes)
-          navigation.dispatch(
-            CommonActions.reset({
-              index: 0,
-              routes: [{ name: 'Login' as never }],
-            })
-          );
-        }
+        },
       },
-    },
-  ]);
-};
+    ]);
+  };
 
   const avatar =
     profile?.avatarUrl ||
@@ -190,30 +242,25 @@ export default function ProfileScreen({ navigation }: Props) {
       contentContainerStyle={{ paddingBottom: 36 }}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
-      {/* Teal background behind avatar */}
       <View style={styles.headerBg} />
 
-      {/* Error banner (compact & actionable) */}
       {anyError ? (
         <View style={styles.errorBox}>
           <Text style={styles.errorTitle}>Bazı veriler yüklenemedi</Text>
           {errors.profile ? <Text style={styles.errorText}>• {errors.profile}</Text> : null}
           {errors.referral ? <Text style={styles.errorText}>• {errors.referral}</Text> : null}
           {errors.wallet ? <Text style={styles.errorText}>• {errors.wallet}</Text> : null}
-
           <Pressable style={styles.retryBtn} onPress={load} disabled={loading}>
             <Text style={styles.retryText}>{loading ? 'Yükleniyor…' : 'Tekrar Dene'}</Text>
           </Pressable>
         </View>
       ) : null}
 
-      {/* Header card */}
       <View style={styles.headerCard}>
         <Image source={{ uri: avatar }} style={styles.avatar} />
         <Text style={styles.name}>{profile?.fullName || 'Guest User'}</Text>
         <Text style={styles.position}>{profile?.position || '—'}</Text>
 
-        {/* Referral code row */}
         <View style={styles.refRow}>
           <Text style={styles.refCode}>{refCode?.code ?? (loading ? '...' : '—')}</Text>
           <Pressable onPress={copyCode} style={styles.copyBtn} disabled={!refCode || loading}>
@@ -222,7 +269,6 @@ export default function ProfileScreen({ navigation }: Props) {
         </View>
       </View>
 
-      {/* Menu list */}
       <View style={styles.list}>
         <Pressable style={styles.row} onPress={changePassword}>
           <Text style={styles.rowTitle}>Şifreni Değiştir</Text>
@@ -250,7 +296,6 @@ export default function ProfileScreen({ navigation }: Props) {
         </View>
       </View>
 
-      {/* Logout */}
       <Pressable onPress={logout} style={styles.logout}>
         <Text style={styles.logoutText}>Çıkış Yap</Text>
       </Pressable>
@@ -263,9 +308,7 @@ const styles = StyleSheet.create({
 
   headerBg: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
+    top: 0, left: 0, right: 0,
     height: 96,
     backgroundColor: colors.teal,
     zIndex: -1,

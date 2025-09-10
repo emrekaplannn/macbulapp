@@ -1,4 +1,4 @@
-import api from './client';
+import api from '../lib/api';
 
 export type UserProfile = {
   userId: string;
@@ -8,16 +8,15 @@ export type UserProfile = {
   bio: string | null;
 };
 
-export async function getUserProfile(userId: string): Promise<UserProfile> {
-  const r = await api.get(`/user-profiles/${userId}`);
+export async function getUserProfile(): Promise<UserProfile> {
+  const r = await api.get(`/user-profiles/me`);
   return r.data as UserProfile;
 }
 
 export async function updateUserProfile(
-  userId: string,
   patch: Partial<Pick<UserProfile, 'fullName' | 'position' | 'avatarUrl' | 'bio'>>
 ): Promise<UserProfile> {
-  const r = await api.put(`/user-profiles/${userId}`, patch);
+  const r = await api.put(`/user-profiles/`, patch);
   return r.data as UserProfile;
 }
 
@@ -32,9 +31,9 @@ export type ReferralCodeDto = {
   createdAt: number;
 };
 
-export async function getReferralCode(userId: string): Promise<ReferralCodeDto | null> {
+export async function getReferralCode(): Promise<ReferralCodeDto | null> {
   try {
-    const r = await api.get(`/referral-codes/user-actives/${userId}`);
+    const r = await api.get(`/referral-codes/user-actives`);
 
     // backend sends array of referral codes
     const arr = r.data as ReferralCodeDto;

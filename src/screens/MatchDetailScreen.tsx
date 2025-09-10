@@ -47,7 +47,7 @@ export default function MatchDetailScreen({ route }: Props) {
     try {
       const [mRes, wRes] = await Promise.allSettled([
         getMatchById(id),
-        getWalletByUser(MOCK_USER_ID),
+        getWalletByUser(),
       ]);
 
       if (!mountedRef.current || reqId !== reqIdRef.current) return;

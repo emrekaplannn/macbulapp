@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -9,57 +9,94 @@ import {
   TextInput,
   View,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Feather from 'react-native-vector-icons/Feather';
 import { colors } from '../theme/colors';
+import type { RootStackParamList } from '../navigation/AppNavigator';
+import api from '../lib/api';
+import { useAuthStore } from '../state/authStore';
 
-// This matches the Root stack below
-export type RootStackParamList = { Login: undefined; App: undefined; Register: undefined };
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
 
 export default function LoginScreen({ navigation }: Props) {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
-  const teal = colors?.teal ?? '#0097A7';
+  const [loading, setLoading]   = useState(false);
 
-  const onLogin = () => {
-    // mock: skip auth and enter the app
-    navigation.replace('App');
+  const teal = colors?.teal ?? '#0097A7';
+  const setAuth = useAuthStore((s) => s.setAuth);
+
+  const canSubmit = useMemo(() => {
+    return identifier.trim().length > 3 && password.length >= 4 && !loading;
+  }, [identifier, password, loading]);
+
+  const parseError = (e: any): string => {
+    const msg =
+      e?.response?.data && typeof e.response.data === 'string'
+        ? e.response.data
+        : e?.response?.data?.message ||
+          e?.message ||
+          'Beklenmeyen bir hata oluştu.';
+    return String(msg);
   };
 
-  const onSignup = () => {
-  navigation.navigate('Register');   // 👈 go to Register
-};
+  const onLogin = async () => {
+    if (!canSubmit) return;
+    setLoading(true);
+    try {
+      // backend email bekliyor
+      const payload = {
+        email: identifier.trim(),   // telefonla giriş planlıyorsan burada karar verelim
+        password: password,
+      };
+
+      console.log('[LOGIN][REQ]', payload);
+      const res = await api.post('/auth/login', payload);
+
+      const {
+        accessToken,
+        refreshToken,
+        tokenType = 'Bearer',
+        expiresInMs = 900_000,
+      } = res.data || {};
+
+      if (!accessToken) throw new Error('Access token alınamadı.');
+
+      setAuth({ accessToken, refreshToken, tokenType, expiresInMs });
+      console.log('[LOGIN][OK]');
+      navigation.replace('App');
+    } catch (e) {
+      const msg = parseError(e);
+      console.log('[LOGIN][ERR]', msg);
+      Alert.alert('Giriş başarısız', msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onSignup = () => navigation.navigate('Register');
 
   const onForgot = () => {
     Alert.alert('Yakında', 'Şifre sıfırlama akışı yakında eklenecek.');
   };
 
-  const onKvkk = () => {
-    Alert.alert('KVKK', 'KVKK metni burada gösterilecek.');
-  };
-  const onPrivacy = () => {
-    Alert.alert('Gizlilik Politikası', 'Gizlilik politikası burada gösterilecek.');
-  };
+  const onKvkk = () => Alert.alert('KVKK', 'KVKK metni burada gösterilecek.');
+  const onPrivacy = () => Alert.alert('Gizlilik Politikası', 'Gizlilik politikası burada gösterilecek.');
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: teal }]} edges={['top', 'bottom']}>
       <StatusBar barStyle="light-content" />
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.container}>
-          {/* Brand */}
           <Text style={styles.brand}>MaçBul</Text>
 
-          {/* Inputs */}
           <View style={styles.inputWrap}>
-            <Feather name="phone" size={18} color="rgba(255,255,255,0.9)" />
+            <Feather name="mail" size={18} color="rgba(255,255,255,0.9)" />
             <TextInput
-              placeholder="Telefon numarası veya e-posta"
+              placeholder="E-posta"
               placeholderTextColor="rgba(255,255,255,0.8)"
               value={identifier}
               onChangeText={setIdentifier}
@@ -67,6 +104,7 @@ export default function LoginScreen({ navigation }: Props) {
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
+              editable={!loading}
             />
           </View>
 
@@ -79,40 +117,29 @@ export default function LoginScreen({ navigation }: Props) {
               onChangeText={setPassword}
               style={styles.input}
               secureTextEntry
+              editable={!loading}
             />
           </View>
 
-          {/* Login */}
-          <Pressable style={styles.primaryBtn} onPress={onLogin}>
-            <Text style={styles.primaryBtnText}>Giriş Yap</Text>
+          <Pressable style={[styles.primaryBtn, !canSubmit && { opacity: 0.5 }]} onPress={onLogin} disabled={!canSubmit}>
+            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Giriş Yap</Text>}
           </Pressable>
 
-          {/* Forgot password */}
           <Pressable onPress={onForgot} style={{ marginTop: 10 }}>
             <Text style={styles.linkRow}>
               <Feather name="help-circle" size={14} /> <Text>Şifremi unuttum</Text>
             </Text>
           </Pressable>
 
-          {/* Divider space */}
           <View style={{ height: 28 }} />
 
-          {/* Sign up (mock for now) */}
-          <Pressable style={styles.secondaryBtn} onPress={onSignup}>
+          <Pressable style={styles.secondaryBtn} onPress={onSignup} disabled={loading}>
             <Text style={styles.secondaryBtnText}>Kayıt Ol</Text>
           </Pressable>
 
-          {/* Legal */}
           <Text style={styles.legal}>
-            Devam ederek{' '}
-            <Text style={styles.legalLink} onPress={onKvkk}>
-              KVKK metnini
-            </Text>{' '}
-            ve{' '}
-            <Text style={styles.legalLink} onPress={onPrivacy}>
-              Gizlilik Politikası
-            </Text>
-            ’nı kabul etmiş olursunuz.
+            Devam ederek <Text style={styles.legalLink} onPress={onKvkk}>KVKK metnini</Text> ve{' '}
+            <Text style={styles.legalLink} onPress={onPrivacy}>Gizlilik Politikası</Text>’nı kabul etmiş olursunuz.
           </Text>
         </View>
       </KeyboardAvoidingView>
@@ -122,11 +149,7 @@ export default function LoginScreen({ navigation }: Props) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-  container: {
-    flex: 1,
-    paddingHorizontal: 24,
-    paddingTop: 24,
-  },
+  container: { flex: 1, paddingHorizontal: 24, paddingTop: 24 },
   brand: {
     color: '#fff',
     fontWeight: '900',
@@ -169,10 +192,6 @@ const styles = StyleSheet.create({
   },
   secondaryBtnText: { color: '#fff', fontWeight: '800', fontSize: 18 },
   linkRow: { color: 'rgba(255,255,255,0.9)', fontWeight: '700' },
-  legal: {
-    color: 'rgba(255,255,255,0.9)',
-    textAlign: 'center',
-    marginTop: 16,
-  },
+  legal: { color: 'rgba(255,255,255,0.9)', textAlign: 'center', marginTop: 16 },
   legalLink: { textDecorationLine: 'underline', fontWeight: '800', color: '#fff' },
 });

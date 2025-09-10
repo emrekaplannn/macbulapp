@@ -1,4 +1,4 @@
-import api from './client';
+import api from '../lib/api';
 
 export type Match = {
   id: string;

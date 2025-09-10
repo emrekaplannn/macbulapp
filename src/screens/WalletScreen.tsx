@@ -32,12 +32,12 @@ export default function WalletScreen() {
 
   // ---- data loaders ----
   const loadWallet = async () => {
-    const wallet = await getWalletByUser(MOCK_USER_ID);
+    const wallet = await getWalletByUser();
     setBalance(wallet.balance ?? 0);
   };
 
   const loadHistory = async () => {
-    const tx = await getTransactionsByUser(MOCK_USER_ID);
+    const tx = await getTransactionsByUser();
     setTransactions(tx);
   };
 
@@ -84,7 +84,7 @@ export default function WalletScreen() {
         }
         try {
           setReloading(true);
-          await topUp(MOCK_USER_ID, amount, 'Card top-up (mock)');
+          await topUp( amount, 'Card top-up (mock)');
           await loadWallet();
           if (showHistory) await loadHistory();
         } catch (e: any) {
