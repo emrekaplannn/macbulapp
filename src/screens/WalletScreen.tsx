@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+// src/screens/WalletScreen.tsx
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   StyleSheet,
@@ -10,19 +11,21 @@ import {
   RefreshControl,
 } from 'react-native';
 import {
-  MOCK_USER_ID,
   getTransactionsByUser,
   getWalletByUser,
-  topUp,
+  topUp, // <-- JWT ile /me çalışıyorsa userId göndermiyoruz
   type TransactionDto,
 } from '../api/wallets';
 import { colors } from '../theme/colors';
 import { formatTL, formatDate, formatTime } from '../utils/format';
+import { useWalletStore } from '../state/walletStore';
+import { useAuthStore } from '../state/authStore';
+import axios from 'axios';
 
 export default function WalletScreen() {
   const [loading, setLoading] = useState(true);
   const [reloading, setReloading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false); // ⬅️ pull-to-refresh state
+  const [refreshing, setRefreshing] = useState(false);
   const [balance, setBalance] = useState<number>(0);
 
   // history state
@@ -30,65 +33,118 @@ export default function WalletScreen() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [transactions, setTransactions] = useState<TransactionDto[]>([]);
 
+  // stores
+  const setGlobalBalance = useWalletStore((s) => s.setBalance);
+  const clearAuth       = useAuthStore((s) => s.clearAuth);
+  const accessToken     = useAuthStore((s) => s.accessToken);
+
+  // --- AUTH FAIL (401/403) ortak yakalama ---
+  const handleAuthFail = useCallback((e: unknown, from: string) => {
+    const code =
+      (axios.isAxiosError(e) && e.response?.status) ||
+      (typeof (e as any)?.response?.status === 'number' ? (e as any).response.status : undefined);
+
+    if (code === 401) {
+      console.log('[Wallet] 401 after refresh -> clearAuth', { from });
+      clearAuth?.();
+      return true;
+    }
+
+    // 403 -> sadece korumalı me uçları için auth fail say
+    if (
+      code === 403 &&
+      (from.includes('/wallets') || from.includes('/transactions'))
+    ) {
+      console.log('[Wallet] 403 on protected -> clearAuth', { from });
+      clearAuth?.();
+      return true;
+    }
+
+    return false;
+  }, [clearAuth]);
+
   // ---- data loaders ----
-  const loadWallet = async () => {
-    const wallet = await getWalletByUser();
-    setBalance(wallet.balance ?? 0);
-  };
+  const loadWallet = useCallback(async () => {
+    try {
+      const wallet = await getWalletByUser();         // GET /wallets/user (JWT -> me)
+      const b = typeof wallet?.balance === 'number' ? wallet.balance : 0;
+      setBalance(b);
+      setGlobalBalance(b);                            // global header vs. için sync
+    } catch (e: any) {
+      if (!handleAuthFail(e, '/wallets/user')) {
+        Alert.alert('Hata', e?.message || 'Cüzdan bilgisi alınamadı');
+      }
+      throw e;
+    }
+  }, [handleAuthFail, setGlobalBalance]);
 
-  const loadHistory = async () => {
-    const tx = await getTransactionsByUser();
-    setTransactions(tx);
-  };
+  const loadHistory = useCallback(async () => {
+    try {
+      const tx = await getTransactionsByUser();       // GET /transactions/user (JWT -> me)
+      setTransactions(tx);
+    } catch (e: any) {
+      if (!handleAuthFail(e, '/transactions/user')) {
+        Alert.alert('Hata', e?.message || 'İşlem geçmişi alınamadı');
+      }
+      throw e;
+    }
+  }, [handleAuthFail]);
 
-  const initialLoad = async () => {
+  const initialLoad = useCallback(async () => {
+    // access token yoksa istek atma; AppNavigator akışı üstlenir
+    if (!accessToken) {
+      console.log('[Wallet] no accessToken -> clearAuth');
+      setLoading(false);
+      clearAuth?.();
+      return;
+    }
+
     try {
       setLoading(true);
       await loadWallet();
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'Failed to load wallet');
     } finally {
       setLoading(false);
     }
-  };
+  }, [accessToken, loadWallet, clearAuth]);
 
   useEffect(() => {
     initialLoad();
-  }, []);
+  }, [initialLoad]);
 
   // ---- pull-to-refresh ----
-  const onRefresh = async () => {
+  const onRefresh = useCallback(async () => {
     try {
       setRefreshing(true);
       await loadWallet();
       if (showHistory) {
         await loadHistory();
       }
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'Refresh failed');
     } finally {
       setRefreshing(false);
     }
-  };
+  }, [loadWallet, loadHistory, showHistory]);
 
   // ---- actions ----
-  const handleTopUp = async () => {
+  const handleTopUp = useCallback(() => {
+    // iOS'ta mevcut; Android için kendi modalını yapabilirsin.
     Alert.prompt?.(
-      'Top up',
-      'Enter amount (TRY)',
+      'Bakiye Yükle',
+      'Tutarı girin (TL)',
       async (text) => {
         const amount = Number(text);
         if (!Number.isFinite(amount) || amount <= 0) {
-          Alert.alert('Invalid amount', 'Please enter a positive number.');
+          Alert.alert('Geçersiz tutar', 'Pozitif sayı giriniz.');
           return;
         }
         try {
           setReloading(true);
-          await topUp( amount, 'Card top-up (mock)');
+          await topUp(amount, 'Kart ile yükleme (mock)'); // POST /transactions (JWT -> me)
           await loadWallet();
           if (showHistory) await loadHistory();
         } catch (e: any) {
-          Alert.alert('Error', e?.message || 'Top up failed');
+          if (!handleAuthFail(e, '/transactions')) {
+            Alert.alert('Hata', e?.message || 'Yükleme başarısız');
+          }
         } finally {
           setReloading(false);
         }
@@ -96,24 +152,22 @@ export default function WalletScreen() {
       'plain-text',
       '50'
     );
-  };
+  }, [handleAuthFail, loadHistory, loadWallet, showHistory]);
 
-  const toggleHistory = async () => {
+  const toggleHistory = useCallback(async () => {
     if (showHistory) {
       setShowHistory(false);
       return;
     }
     setShowHistory(true);
-    if (transactions.length > 0) return; // already loaded once
+    if (transactions.length > 0) return; // zaten yüklendiyse tekrar çekme
     try {
       setHistoryLoading(true);
       await loadHistory();
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'Failed to load history');
     } finally {
       setHistoryLoading(false);
     }
-  };
+  }, [showHistory, transactions.length, loadHistory]);
 
   const typeLabel = (t: TransactionDto['type']) =>
     t === 'LOAD' ? 'Yükleme' : t === 'PAY' ? 'Ödeme' : 'İade';

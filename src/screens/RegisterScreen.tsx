@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -30,13 +30,14 @@ type RegisterPayload = {
   password: string;
   phone?: string | null;
   fullName?: string | null;
+  position?: string | null;
 };
 
 type AuthResponse = {
   accessToken: string;
   refreshToken: string;
-  tokenType: 'Bearer';
-  expiresInMs: number; // backend returns 900_000
+  tokenType?: 'Bearer';
+  expiresInMs?: number; // backend returns 900_000
 };
 
 export default function RegisterScreen({ navigation }: Props) {
@@ -54,56 +55,76 @@ export default function RegisterScreen({ navigation }: Props) {
   const [posModal, setPosModal] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const mountedRef = useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
   const isValid = useMemo(() => {
     return (
       name.trim().length > 1 &&
       email.trim().length > 3 &&
-      phone.trim().length > 5 &&
+      (phone.trim().length === 0 || phone.trim().length > 5) && // boş olabilir veya 6+ hane
       !!position &&
       password.length >= 4 &&
       confirm === password &&
-      consent
+      consent &&
+      !loading
     );
-  }, [name, email, phone, position, password, confirm, consent]);
+  }, [name, email, phone, position, password, confirm, consent, loading]);
+
+  const parseError = (e: any): string => {
+    const msg =
+      e?.response?.data && typeof e.response.data === 'string'
+        ? e.response.data
+        : e?.response?.data?.message ||
+          e?.response?.data?.error ||
+          e?.message ||
+          'Kayıt sırasında bir hata oluştu.';
+    return String(msg);
+  };
 
   const onSubmit = async () => {
-    if (!isValid) return;
+    if (!isValid || loading) return;
+    setLoading(true);
     try {
-      setLoading(true);
-
       const payload: RegisterPayload = {
         email: email.trim().toLowerCase(),
-        password: password,
-        phone: phone.trim(),
+        password,
+        fullName: name.trim(),
+        position: position ?? null,
+        ...(phone.trim() ? { phone: phone.trim() } : {}), // boşsa gönderme
       };
 
+      // /auth/register -> api.ts Authorization eklemiyor (isAuthRequest)
       const resp = await api.post<AuthResponse>('/auth/register', payload);
-      const data = resp.data;
+      const data = resp.data || {};
+
+      if (!data?.accessToken) {
+        throw new Error('Access token alınamadı.');
+      }
 
       setAuth({
         accessToken: data.accessToken,
         refreshToken: data.refreshToken,
         tokenType: data.tokenType ?? 'Bearer',
-        expiresInMs: data.expiresInMs ?? 900000,
+        expiresInMs: data.expiresInMs ?? 900_000,
       });
 
-      // optional profile store for UI
+      // UI için opsiyonel profile store
       setProfile({
-        fullName: name.trim(),
-        position: position ?? null,
+        fullName: payload.fullName ?? null,
+        position: payload.position ?? null,
         avatarUrl: null,
       });
 
-      navigation.replace('App');
     } catch (e: any) {
-      console.log('Register error', e?.response?.data || e?.message);
-      const msg =
-        e?.response?.data?.message ||
-        e?.response?.data?.error ||
-        'Kayıt sırasında bir hata oluştu.';
+      const msg = parseError(e);
+      console.log('[REGISTER][ERR]', msg);
       Alert.alert('Kayıt başarısız', msg);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   };
 
@@ -113,47 +134,104 @@ export default function RegisterScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: teal }]} edges={['top', 'bottom']}>
       <StatusBar barStyle="light-content" />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.select({ ios: 'padding', android: undefined })}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.select({ ios: 'padding', android: undefined })}
+      >
         <View style={styles.container}>
           <Text style={styles.brand}>MaçBul</Text>
 
           <InputRow icon="user" placeholder="Ad Soyad" value={name} onChangeText={setName} />
-          <InputRow icon="mail" placeholder="E-posta" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
-          <InputRow icon="phone" placeholder="Telefon numarası" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+          <InputRow
+            icon="mail"
+            placeholder="E-posta"
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="next"
+          />
+          <InputRow
+            icon="phone"
+            placeholder="Telefon numarası (opsiyonel)"
+            value={phone}
+            onChangeText={setPhone}
+            keyboardType="phone-pad"
+            returnKeyType="next"
+          />
 
           <Pressable style={styles.inputWrap} onPress={() => setPosModal(true)}>
             <Feather name="briefcase" size={18} color="rgba(255,255,255,0.9)" />
-            <Text style={[styles.inputText, { opacity: position ? 1 : 0.8 }]}>{position || 'Pozisyon'}</Text>
+            <Text style={[styles.inputText, { opacity: position ? 1 : 0.8 }]}>
+              {position || 'Pozisyon'}
+            </Text>
             <Feather name="chevron-down" size={18} color="rgba(255,255,255,0.9)" />
           </Pressable>
 
-          <InputRow icon="lock" placeholder="Şifre" value={password} onChangeText={setPassword} secureTextEntry />
-          <InputRow icon="check-square" placeholder="Şifreyi Onayla" value={confirm} onChangeText={setConfirm} secureTextEntry />
+          <InputRow
+            icon="lock"
+            placeholder="Şifre"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+            returnKeyType="next"
+          />
+          <InputRow
+            icon="check-square"
+            placeholder="Şifreyi Onayla"
+            value={confirm}
+            onChangeText={setConfirm}
+            secureTextEntry
+            returnKeyType="done"
+            onSubmitEditing={onSubmit}
+          />
 
           <Pressable style={styles.consentRow} onPress={() => setConsent((v) => !v)}>
             <Feather name={consent ? 'check-square' : 'square'} size={18} color="#fff" />
             <Text style={styles.legal}>
-              {''}Devam ederek <Text style={styles.legalLink} onPress={onKvkk}>KVKK metnini</Text> ve{' '}
+              {' '}
+              Devam ederek <Text style={styles.legalLink} onPress={onKvkk}>KVKK metnini</Text> ve{' '}
               <Text style={styles.legalLink} onPress={onPrivacy}>Gizlilik Politikası</Text>’nı kabul etmiş olursun.
             </Text>
           </Pressable>
 
-          <Pressable style={[styles.primaryBtn, (!isValid || loading) && { opacity: 0.5 }]} onPress={onSubmit} disabled={!isValid || loading}>
+          <Pressable
+            style={[styles.primaryBtn, (!isValid || loading) && { opacity: 0.5 }]}
+            onPress={onSubmit}
+            disabled={!isValid || loading}
+          >
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Kayıt Ol</Text>}
           </Pressable>
 
-          <Pressable onPress={() => navigation.replace('Login')} style={{ marginTop: 'auto', marginBottom: 'auto' }}>
+          <Pressable
+            onPress={() => navigation.replace('Login')}
+            style={{ marginTop: 'auto', marginBottom: 'auto' }}
+            disabled={loading}
+          >
             <Text style={styles.loginLink2}>Zaten bir hesabınız var mı?</Text>
             <Text style={styles.loginLink}>Giriş Yap</Text>
           </Pressable>
         </View>
       </KeyboardAvoidingView>
 
-      <Modal visible={posModal} transparent animationType="fade" onRequestClose={() => setPosModal(false)}>
+      <Modal
+        visible={posModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPosModal(false)}
+      >
         <Pressable style={styles.modalBackdrop} onPress={() => setPosModal(false)}>
           <View style={styles.modalSheet}>
             {POSITIONS.map((p) => (
-              <Pressable key={p} style={styles.modalItem} onPress={() => { setPosition(p); setPosModal(false); }}>
+              <Pressable
+                key={p}
+                style={styles.modalItem}
+                onPress={() => {
+                  setPosition(p);
+                  setPosModal(false);
+                }}
+              >
                 <Text style={styles.modalItemText}>{p}</Text>
               </Pressable>
             ))}

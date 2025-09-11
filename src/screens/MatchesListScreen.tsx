@@ -8,7 +8,7 @@ import { colors } from '../theme/colors';
 import { listMatches, Match } from '../api/matches';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { HomeStackParamList } from '../navigation/AppNavigator';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { getWalletByUser } from '../api/wallets';
 import { useWalletStore } from '../state/walletStore';
 import { getUserProfile } from '../api/profile';
@@ -16,17 +16,16 @@ import { useProfileStore } from '../state/profileStore';
 import { useAuthStore } from '../state/authStore';
 import axios from 'axios';
 import MatchCard from '../components/MatchCard';
-import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import type { RootStackParamList } from '../navigation/AppNavigator';
 
 type Props = NativeStackScreenProps<HomeStackParamList, 'MatchesList'>;
 type ErrorState = { matches?: string; wallet?: string; profile?: string };
-type RootNav = NativeStackNavigationProp<RootStackParamList>;
 
 const LOG = (...a: any[]) => console.log('[MatchesList]', ...a);
 const LOGG = (title: string, obj: any) => {
   try { console.log('[MatchesList]', title, JSON.stringify(obj)); } catch { console.log('[MatchesList]', title, obj); }
 };
+
+const mask = (t?: string | null) => (t ? `${t.slice(0, 6)}…${t.slice(-6)}` : '(none)');
 
 const getErrMsg = (e: unknown) =>
   (axios.isAxiosError(e) && (e.response?.data?.message || e.message)) ||
@@ -38,7 +37,6 @@ export default function MatchesListScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errors, setErrors] = useState<ErrorState>({});
-  const rootNav = useNavigation<RootNav>();
 
   // auth durumu
   const accessToken   = useAuthStore((s) => s.accessToken);
@@ -57,137 +55,105 @@ export default function MatchesListScreen({ navigation }: Props) {
     return () => { mountedRef.current = false; LOG('unmount'); };
   }, []);
 
-  // navigation state değişince logla (döngü var mı bakmak için)
+  // token’ı her değiştiğinde maskeli logla
   useEffect(() => {
-    const unsub = (navigation as any).addListener?.('state', () => {
-      LOG('navigation state changed');
-    });
-    return unsub;
-  }, [navigation]);
-
-  // token’ı her render’da logla (rehydration kaybı var mı?)
-  useEffect(() => {
-    LOG('tokens', { hasAccess: !!accessToken, hasRefresh: !!refreshToken, tokenType });
+    LOG('tokens', { access: mask(accessToken), refresh: mask(refreshToken), tokenType });
   }, [accessToken, refreshToken, tokenType]);
 
-  // 401/403 yakaladığımızda Login’e dön
-  // MatchesListScreen.tsx içindeki handleAuthFail'i değiştir
-const handleAuthFail = useCallback((e: unknown, fromUrl?: string) => {
-  if (axios.isAxiosError(e)) {
-    const code = e.response?.status;
-    const url  = fromUrl || e.config?.url || '';
+  // 401/403 yakalanırsa sadece auth’u temizle (AppNavigator seni Login/Register’a düşürür)
+  const handleAuthFail = useCallback((e: unknown) => {
+    if (axios.isAxiosError(e)) {
+      const code = e.response?.status;
+      const url  = e.config?.url || '';
 
-    console.log('[MatchesList][AUTHFAIL?]', { code, url });
-
-    // 401 -> her zaman auth fail
-    if (code === 401) {
-      console.log('[MatchesList] 401 -> clearAuth + Login');
-      clearAuth();
-      rootNav.replace('Login');
-      return true;
-    }
-
-    // 403 -> sadece me-endpointleri için auth fail say
-    const needsAuth =
-      url.includes('/wallets') ||
-      url.includes('/transactions') ||
-      url.includes('/user-profiles');
-    if (code === 403 && needsAuth) {
-      console.log('[MatchesList] 403 on protected endpoint -> clearAuth + Login');
-      clearAuth();
-      rootNav.replace('Login');
-      return true;
-    }
-  }
-  return false;
-}, [clearAuth, rootNav]);
-
-
-  // MatchesListScreen.tsx içindeki load fonksiyonunda
-const load = useCallback(async () => {
-  const reqId = ++reqIdRef.current;
-  LOG('load start', { reqId });
-  setLoading(true);
-  setErrors({});
-
-  // ---- TOKEN DEBUG ----
-  const { accessToken, refreshToken, tokenType } = useAuthStore.getState();
-  console.log('[MatchesList][DEBUG] accessToken=', accessToken);
-  console.log('[MatchesList][DEBUG] refreshToken=', refreshToken);
-  console.log('[MatchesList][DEBUG] tokenType=', tokenType);
-
-  if (!accessToken) {
-    LOG('no accessToken -> replace(Login)');
-    rootNav.replace('Login');
-    return;
-  }
-
-  try {
-    LOG('fetching: matches, wallet/me, profile/me');
-
-    const [mRes, wRes, pRes] = await Promise.allSettled([
-      listMatches(),
-      getWalletByUser(),
-      getUserProfile(),
-    ]);
-
-    if (!mountedRef.current || reqId !== reqIdRef.current) return;
-
-    // ---- matches ----
-    if (mRes.status === 'fulfilled') {
-      LOG('matches OK', { count: mRes.value?.length });
-      setItems(mRes.value);
-    } else {
-      LOG('matches ERROR', mRes.reason);
-      if (!handleAuthFail(mRes.reason)) {
-        setErrors((s) => ({ ...s, matches: getErrMsg(mRes.reason) }));
-      }
-    }
-
-    // ---- wallet ----
-    if (wRes.status === 'fulfilled') {
-      LOGG('wallet OK', wRes.value);
-      setGlobalBalance(wRes.value?.balance ?? 0);
-    } else {
-      LOG('wallet ERROR', wRes.reason);
-
-      // !!! Burada headerları logla
-      if (axios.isAxiosError(wRes.reason)) {
-        console.log('[MatchesList][Wallet][DEBUG HEADERS]', wRes.reason.config?.headers);
+      // 401 -> refresh sonrasında da 401 ise buraya düşer
+      if (code === 401) {
+        clearAuth();
+        return true;
       }
 
-      if (!handleAuthFail(wRes.reason)) {
-        setGlobalBalance(null);
-        setErrors((s) => ({ ...s, wallet: getErrMsg(wRes.reason) }));
+      // 403 -> korumalı me endpointleri için auth fail say
+      const needsAuth =
+        url.includes('/wallets') ||
+        url.includes('/transactions') ||
+        url.includes('/user-profiles');
+
+      if (code === 403 && needsAuth) {
+        clearAuth();
+        return true;
       }
     }
+    return false;
+  }, [clearAuth]);
 
-    // ---- profile ----
-    if (pRes.status === 'fulfilled') {
-      LOGG('profile OK', pRes.value);
-      setProfileStore({
-        fullName: pRes.value.fullName ?? null,
-        position: pRes.value.position ?? null,
-        avatarUrl: pRes.value.avatarUrl ?? null,
-      });
-    } else {
-      LOG('profile ERROR', pRes.reason);
+  const load = useCallback(async () => {
+    const reqId = ++reqIdRef.current;
+    LOG('load start', { reqId });
+    setLoading(true);
+    setErrors({});
 
-      if (axios.isAxiosError(pRes.reason)) {
-        console.log('[MatchesList][Profile][DEBUG HEADERS]', pRes.reason.config?.headers);
-      }
-
-      if (!handleAuthFail(pRes.reason)) {
-        setErrors((s) => ({ ...s, profile: getErrMsg(pRes.reason) }));
-      }
-    }
-  } finally {
-    if (mountedRef.current && reqId === reqIdRef.current) {
-      LOG('load end', { reqId });
+    // Access token yoksa ekranda sadece auth’u temizle, navigasyonu AppNavigator yönetsin
+    if (!useAuthStore.getState().accessToken) {
       setLoading(false);
+      clearAuth();
+      return;
     }
-  }
-}, [setGlobalBalance, setProfileStore, rootNav, handleAuthFail]);
+
+    try {
+      LOG('fetching: matches, wallet/me, profile/me');
+
+      const [mRes, wRes, pRes] = await Promise.allSettled([
+        listMatches(),
+        getWalletByUser(),
+        getUserProfile(),
+      ]);
+
+      if (!mountedRef.current || reqId !== reqIdRef.current) return;
+
+      // ---- matches ----
+      if (mRes.status === 'fulfilled') {
+        LOG('matches OK', { count: mRes.value?.length });
+        setItems(mRes.value);
+      } else {
+        LOG('matches ERROR', mRes.reason);
+        if (!handleAuthFail(mRes.reason)) {
+          setErrors((s) => ({ ...s, matches: getErrMsg(mRes.reason) }));
+        }
+      }
+
+      // ---- wallet ----
+      if (wRes.status === 'fulfilled') {
+        LOGG('wallet OK', wRes.value);
+        setGlobalBalance(wRes.value?.balance ?? 0);
+      } else {
+        LOG('wallet ERROR', wRes.reason);
+        if (!handleAuthFail(wRes.reason)) {
+          setGlobalBalance(null);
+          setErrors((s) => ({ ...s, wallet: getErrMsg(wRes.reason) }));
+        }
+      }
+
+      // ---- profile ----
+      if (pRes.status === 'fulfilled') {
+        LOGG('profile OK', pRes.value);
+        setProfileStore({
+          fullName:  pRes.value.fullName  ?? null,
+          position:  pRes.value.position  ?? null,
+          avatarUrl: pRes.value.avatarUrl ?? null,
+        });
+      } else {
+        LOG('profile ERROR', pRes.reason);
+        if (!handleAuthFail(pRes.reason)) {
+          setErrors((s) => ({ ...s, profile: getErrMsg(pRes.reason) }));
+        }
+      }
+    } finally {
+      if (mountedRef.current && reqId === reqIdRef.current) {
+        LOG('load end', { reqId });
+        setLoading(false);
+      }
+    }
+  }, [setGlobalBalance, setProfileStore, handleAuthFail, clearAuth]);
 
   // focus olduğunda yükle
   useFocusEffect(
@@ -238,7 +204,11 @@ const load = useCallback(async () => {
           )
         }
         renderItem={({ item }) => (
-          <MatchCard match={item} onJoin={handleJoin} onPress={(id) => navigation.navigate('MatchDetail', { id })} />
+          <MatchCard
+            match={item}
+            onJoin={handleJoin}
+            onPress={(id) => navigation.navigate('MatchDetail', { id })}
+          />
         )}
       />
     </View>

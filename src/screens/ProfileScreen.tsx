@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import Clipboard from '@react-native-clipboard/clipboard';
-import { useFocusEffect, CommonActions } from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { colors } from '../theme/colors';
@@ -55,53 +55,40 @@ export default function ProfileScreen({ navigation }: Props) {
   const accessToken  = useAuthStore((s) => s.accessToken);
   const clearAuth    = useAuthStore((s) => s.clearAuth);
 
+  // 401/403 (refresh sonrası hâlâ) → sadece auth’u temizle; AppNavigator yönlendirir
   const handleAuthFail = useCallback((e: unknown, from?: string) => {
     if (axios.isAxiosError(e)) {
       const code = e.response?.status;
       const url  = from || e.config?.url || '';
       console.log('[Profile][AUTH?]', { code, url });
 
-      // 401: her zaman oturum düşür
       if (code === 401) {
-        console.log('[Profile] 401 -> clearAuth + reset(Login)');
         clearAuth();
-        const rootNav = navigation.getParent()?.getParent(); // ProfileStack -> Drawer -> Root
-        (rootNav ?? navigation).dispatch(
-          CommonActions.reset({ index: 0, routes: [{ name: 'Login' as never }] })
-        );
         return true;
       }
 
-      // 403: me endpointlerinde auth hatası say
       const needsAuth =
         url.includes('/wallets') ||
         url.includes('/transactions') ||
-        url.includes('/user-profiles');
+        url.includes('/user-profiles') ||
+        url.includes('/referral-codes');
+
       if (code === 403 && needsAuth) {
-        console.log('[Profile] 403 protected -> clearAuth + reset(Login)');
         clearAuth();
-        const rootNav = navigation.getParent()?.getParent();
-        (rootNav ?? navigation).dispatch(
-          CommonActions.reset({ index: 0, routes: [{ name: 'Login' as never }] })
-        );
         return true;
       }
     }
     return false;
-  }, [clearAuth, navigation]);
+  }, [clearAuth]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setErrors({});
-    let alive = true;
 
-    // token yoksa direkt Login
+    // Access yoksa istek atma; AppNavigator akışı üstlenir
     if (!accessToken) {
-      LOG('no accessToken -> reset(Login)');
-      const rootNav = navigation.getParent()?.getParent();
-      (rootNav ?? navigation).dispatch(
-        CommonActions.reset({ index: 0, routes: [{ name: 'Login' as never }] })
-      );
+      setLoading(false);
+      clearAuth();
       return;
     }
 
@@ -113,21 +100,23 @@ export default function ProfileScreen({ navigation }: Props) {
         getWalletByUser(),
       ]);
 
-      if (!alive) return;
-
       // Profile
       if (pRes.status === 'fulfilled') {
         setProfile(pRes.value);
         const { fullName, position, avatarUrl } = pRes.value || {};
         useProfileStore
           .getState()
-          .setProfile({ fullName: fullName ?? null, position: position ?? null, avatarUrl: avatarUrl ?? null });
+          .setProfile({
+            fullName: fullName ?? null,
+            position: position ?? null,
+            avatarUrl: avatarUrl ?? null,
+          });
       } else {
         if (!handleAuthFail(pRes.reason, '/user-profiles/me')) {
           console.error('UserProfile failed:', pRes.reason);
           setErrors((s) => ({ ...s, profile: `Profil bilgileri alınamadı: ${getErrMsg(pRes.reason)}` }));
         } else {
-          return; // auth fail durumda devam etmeye gerek yok
+          return; // auth fail -> UI üstte yönlenir
         }
       }
 
@@ -161,30 +150,20 @@ export default function ProfileScreen({ navigation }: Props) {
       if (!handleAuthFail(e)) {
         console.error(e);
         setErrors({
-          profile: `Yükleme başarısız: ${getErrMsg(e)}`,
+          profile:  `Yükleme başarısız: ${getErrMsg(e)}`,
           referral: `Yükleme başarısız: ${getErrMsg(e)}`,
-          wallet: `Yükleme başarısız: ${getErrMsg(e)}`,
+          wallet:   `Yükleme başarısız: ${getErrMsg(e)}`,
         });
         setGlobalBalance(null);
       }
     } finally {
-      if (alive) setLoading(false);
+      setLoading(false);
     }
-
-    return () => {
-      alive = false;
-    };
-  }, [accessToken, handleAuthFail, navigation, setGlobalBalance]);
+  }, [accessToken, handleAuthFail, setGlobalBalance, clearAuth]);
 
   useFocusEffect(
     useCallback(() => {
-      let cleanup: void | (() => void);
-      (async () => {
-        cleanup = await load();
-      })();
-      return () => {
-        if (typeof cleanup === 'function') cleanup();
-      };
+      load();
     }, [load])
   );
 
@@ -219,12 +198,7 @@ export default function ProfileScreen({ navigation }: Props) {
           useWalletStore.getState().clear?.();
           useProfileStore.getState().clear?.();
           useAuthStore.getState().clearAuth(); // 🔑 auth temizle
-
-          // Root stack'i Login'e sıfırla
-          const rootNav = navigation.getParent()?.getParent();
-          (rootNav ?? navigation).dispatch(
-            CommonActions.reset({ index: 0, routes: [{ name: 'Login' as never }] })
-          );
+          // Navigasyonu AppNavigator yönetecek (key değişimi ile)
         },
       },
     ]);
@@ -247,9 +221,9 @@ export default function ProfileScreen({ navigation }: Props) {
       {anyError ? (
         <View style={styles.errorBox}>
           <Text style={styles.errorTitle}>Bazı veriler yüklenemedi</Text>
-          {errors.profile ? <Text style={styles.errorText}>• {errors.profile}</Text> : null}
-          {errors.referral ? <Text style={styles.errorText}>• {errors.referral}</Text> : null}
-          {errors.wallet ? <Text style={styles.errorText}>• {errors.wallet}</Text> : null}
+          {errors.profile ?  <Text style={styles.errorText}>• {errors.profile}</Text>   : null}
+          {errors.referral ? <Text style={styles.errorText}>• {errors.referral}</Text>  : null}
+          {errors.wallet ?   <Text style={styles.errorText}>• {errors.wallet}</Text>    : null}
           <Pressable style={styles.retryBtn} onPress={load} disabled={loading}>
             <Text style={styles.retryText}>{loading ? 'Yükleniyor…' : 'Tekrar Dene'}</Text>
           </Pressable>

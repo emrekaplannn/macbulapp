@@ -6,6 +6,7 @@ import { createDrawerNavigator } from '@react-navigation/drawer';
 import Feather from 'react-native-vector-icons/Feather';
 
 import { colors } from '../theme/colors';
+import { useAuthStore } from '../state/authStore';
 
 import MatchesListScreen from '../screens/MatchesListScreen';
 import MatchDetailScreen from '../screens/MatchDetailScreen';
@@ -18,6 +19,7 @@ import RegisterScreen from '../screens/RegisterScreen';
 import CustomDrawerContent from './CustomDrawerContent';
 import { appHeaderOptions } from './headerOptions';
 import ProfileWalletRight from './ProfileWalletRight';
+import AuthGate from './AuthGate';
 
 /** ---------- Home Stack ---------- */
 export type HomeStackParamList = {
@@ -25,7 +27,6 @@ export type HomeStackParamList = {
   MatchDetail: { id: string };
 };
 const HomeStack = createNativeStackNavigator<HomeStackParamList>();
-
 function HomeStackNavigator() {
   return (
     <HomeStack.Navigator>
@@ -57,7 +58,6 @@ function HomeStackNavigator() {
 /** ---------- Wallet Stack ---------- */
 export type WalletStackParamList = { Wallet: undefined };
 const WalletStack = createNativeStackNavigator<WalletStackParamList>();
-
 function WalletStackNavigator() {
   return (
     <WalletStack.Navigator>
@@ -76,7 +76,6 @@ function WalletStackNavigator() {
 /** ---------- Profile Stack ---------- */
 export type ProfileStackParamList = { Profile: undefined; Support: undefined };
 const ProfileStack = createNativeStackNavigator<ProfileStackParamList>();
-
 function ProfileStackNavigator() {
   return (
     <ProfileStack.Navigator>
@@ -113,7 +112,6 @@ export type AppDrawerParamList = {
   ProfileStack: undefined;
 };
 const Drawer = createDrawerNavigator<AppDrawerParamList>();
-
 function AppShell() {
   return (
     <Drawer.Navigator
@@ -141,7 +139,9 @@ function AppShell() {
         component={WalletStackNavigator}
         options={{
           title: 'Cüzdan',
-          drawerIcon: ({ color, size }) => <Feather name="credit-card" size={size ?? 20} color={color} />,
+          drawerIcon: ({ color, size }) => (
+            <Feather name="credit-card" size={size ?? 20} color={color} />
+          ),
         }}
       />
       <Drawer.Screen
@@ -165,13 +165,28 @@ export type RootStackParamList = {
 const RootStack = createNativeStackNavigator<RootStackParamList>();
 
 export default function AppNavigator() {
+  const { accessToken, refreshToken } = useAuthStore();
+  const isAuthed = !!accessToken && !!refreshToken;
+
   return (
     <NavigationContainer>
-      <RootStack.Navigator screenOptions={{ headerShown: false }}>
-        <RootStack.Screen name="Login" component={LoginScreen} />
-        <RootStack.Screen name="Register" component={RegisterScreen} />
-        <RootStack.Screen name="App" component={AppShell} />
-      </RootStack.Navigator>
+      <AuthGate>
+        {/* key: auth değişince state’i sıfırla; initialRouteName: doğru yoldan başla */}
+        <RootStack.Navigator
+          key={isAuthed ? 'app' : 'auth'}
+          initialRouteName={isAuthed ? 'App' : 'Login'}
+          screenOptions={{ headerShown: false, animationTypeForReplace: 'push' }}
+        >
+          {isAuthed ? (
+            <RootStack.Screen name="App" component={AppShell} />
+          ) : (
+            <>
+              <RootStack.Screen name="Login" component={LoginScreen} />
+              <RootStack.Screen name="Register" component={RegisterScreen} />
+            </>
+          )}
+        </RootStack.Navigator>
+      </AuthGate>
     </NavigationContainer>
   );
 }

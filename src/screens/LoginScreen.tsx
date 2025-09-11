@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -23,11 +23,12 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
 
 export default function LoginScreen({ navigation }: Props) {
   const [identifier, setIdentifier] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading]   = useState(false);
+  const [password, setPassword]     = useState('');
+  const [loading, setLoading]       = useState(false);
 
   const teal = colors?.teal ?? '#0097A7';
   const setAuth = useAuthStore((s) => s.setAuth);
+  const mountedRef = useRef(true);
 
   const canSubmit = useMemo(() => {
     return identifier.trim().length > 3 && password.length >= 4 && !loading;
@@ -43,18 +44,21 @@ export default function LoginScreen({ navigation }: Props) {
     return String(msg);
   };
 
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
   const onLogin = async () => {
-    if (!canSubmit) return;
+    if (!canSubmit || loading) return;
     setLoading(true);
     try {
-      // backend email bekliyor
-      const payload = {
-        email: identifier.trim(),   // telefonla giriş planlıyorsan burada karar verelim
-        password: password,
-      };
+      const email = identifier.trim().toLowerCase();
 
-      console.log('[LOGIN][REQ]', payload);
-      const res = await api.post('/auth/login', payload);
+      console.log('[LOGIN][REQ]', { email, password: '•••' }); // mask
+
+      // /auth/login -> api.ts, Authorization eklemez (isAuthRequest)
+      const res = await api.post('/auth/login', { email, password });
 
       const {
         accessToken,
@@ -67,22 +71,18 @@ export default function LoginScreen({ navigation }: Props) {
 
       setAuth({ accessToken, refreshToken, tokenType, expiresInMs });
       console.log('[LOGIN][OK]');
-      navigation.replace('App');
+
     } catch (e) {
       const msg = parseError(e);
       console.log('[LOGIN][ERR]', msg);
       Alert.alert('Giriş başarısız', msg);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   };
 
   const onSignup = () => navigation.navigate('Register');
-
-  const onForgot = () => {
-    Alert.alert('Yakında', 'Şifre sıfırlama akışı yakında eklenecek.');
-  };
-
+  const onForgot = () => Alert.alert('Yakında', 'Şifre sıfırlama akışı yakında eklenecek.');
   const onKvkk = () => Alert.alert('KVKK', 'KVKK metni burada gösterilecek.');
   const onPrivacy = () => Alert.alert('Gizlilik Politikası', 'Gizlilik politikası burada gösterilecek.');
 
@@ -105,6 +105,8 @@ export default function LoginScreen({ navigation }: Props) {
               autoCapitalize="none"
               autoCorrect={false}
               editable={!loading}
+              returnKeyType="next"
+              onSubmitEditing={() => { /* şifre alanına geçilebilir */ }}
             />
           </View>
 
@@ -118,10 +120,16 @@ export default function LoginScreen({ navigation }: Props) {
               style={styles.input}
               secureTextEntry
               editable={!loading}
+              returnKeyType="done"
+              onSubmitEditing={onLogin}
             />
           </View>
 
-          <Pressable style={[styles.primaryBtn, !canSubmit && { opacity: 0.5 }]} onPress={onLogin} disabled={!canSubmit}>
+          <Pressable
+            style={[styles.primaryBtn, !canSubmit && { opacity: 0.5 }]}
+            onPress={onLogin}
+            disabled={!canSubmit}
+          >
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Giriş Yap</Text>}
           </Pressable>
 

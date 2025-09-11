@@ -1,3 +1,4 @@
+// src/screens/MatchDetailScreen.tsx
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, Image, Alert, ScrollView,
@@ -11,8 +12,10 @@ import { getMatchById, Match } from '../api/matches';
 import LargeButton from '../components/LargeButton';
 import Icon from 'react-native-vector-icons/Feather';
 import { useFocusEffect } from '@react-navigation/native';
-import { getWalletByUser, MOCK_USER_ID } from '../api/wallets';
+import { getWalletByUser } from '../api/wallets';
 import { useWalletStore } from '../state/walletStore';
+import { useAuthStore } from '../state/authStore';
+import axios from 'axios';
 
 type Props = NativeStackScreenProps<HomeStackParamList, 'MatchDetail'>;
 
@@ -20,6 +23,7 @@ const PITCH_PLACEHOLDER =
   'https://images.pexels.com/photos/46798/the-ball-stadion-football-the-pitch-46798.jpeg?auto=compress&cs=tinysrgb&w=1200';
 
 const getErrMsg = (e: unknown) =>
+  (axios.isAxiosError(e) && (e.response?.data?.message || e.message)) ||
   (typeof e === 'object' && e && 'message' in e && String((e as any).message)) ||
   (typeof e === 'string' ? e : 'Beklenmeyen bir hata oluştu.');
 
@@ -31,13 +35,40 @@ export default function MatchDetailScreen({ route }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // use store setter without creating a dependency
+  // stores
   const setGlobalBalance = useWalletStore.getState().setBalance;
+  const clearAuth       = useAuthStore((s) => s.clearAuth);
+  const accessToken     = useAuthStore((s) => s.accessToken);
 
   // stale/unmount guards
   const reqIdRef = useRef(0);
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
+
+  // 401/403 (refresh sonrası) -> sadece auth’u temizle; AppNavigator login akışına düşürür
+  const handleAuthFail = useCallback((e: unknown, fromUrl?: string) => {
+    if (axios.isAxiosError(e)) {
+      const code = e.response?.status;
+      const url  = fromUrl || e.config?.url || '';
+
+      if (code === 401) {
+        clearAuth?.();
+        return true;
+      }
+
+      // 403 ise yalnızca korumalı me uçları için auth fail say
+      const needsAuth =
+        url.includes('/wallets') ||
+        url.includes('/transactions') ||
+        url.includes('/user-profiles');
+
+      if (code === 403 && needsAuth) {
+        clearAuth?.();
+        return true;
+      }
+    }
+    return false;
+  }, [clearAuth]);
 
   const load = useCallback(async () => {
     const reqId = ++reqIdRef.current;
@@ -45,33 +76,46 @@ export default function MatchDetailScreen({ route }: Props) {
     setError(null);
 
     try {
-      const [mRes, wRes] = await Promise.allSettled([
-        getMatchById(id),
-        getWalletByUser(),
-      ]);
+      // her zaman: maç public
+      const matchPromise = getMatchById(id);
+
+      // sadece access varsa: cüzdan
+      const walletPromise = accessToken ? getWalletByUser() : Promise.resolve(null as any);
+
+      const [mRes, wRes] = await Promise.allSettled([matchPromise, walletPromise]);
 
       if (!mountedRef.current || reqId !== reqIdRef.current) return;
 
+      // match
       if (mRes.status === 'fulfilled') {
         setMatch(mRes.value);
       } else {
         setError(`Maç bilgisi alınamadı: ${getErrMsg(mRes.reason)}`);
       }
 
+      // wallet
       if (wRes.status === 'fulfilled') {
-        const b = Number.isFinite(wRes.value?.balance) ? wRes.value.balance : 0;
-        setGlobalBalance(b); // ✅ updates shared header balance
+        if (wRes.value) {
+          const b = Number.isFinite(wRes.value?.balance) ? wRes.value.balance : 0;
+          setGlobalBalance(b);
+        } else {
+          setGlobalBalance(null);
+        }
       } else {
-        setGlobalBalance(null);
+        if (!handleAuthFail(wRes.reason, '/wallets/user')) {
+          setGlobalBalance(null); // sessiz düş
+        }
       }
     } catch (e) {
       if (!mountedRef.current || reqId !== reqIdRef.current) return;
-      setError(getErrMsg(e));
-      setGlobalBalance(null);
+      if (!handleAuthFail(e)) {
+        setError(getErrMsg(e));
+        setGlobalBalance(null);
+      }
     } finally {
       if (mountedRef.current && reqId === reqIdRef.current) setLoading(false);
     }
-  }, [id, setGlobalBalance]);
+  }, [id, accessToken, handleAuthFail, setGlobalBalance]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -80,16 +124,26 @@ export default function MatchDetailScreen({ route }: Props) {
     try { await load(); } finally { setRefreshing(false); }
   }, [load]);
 
-  const joinSolo = () => Alert.alert('Joined (mock)', 'You joined as a single player.');
-  const joinGroup = () => Alert.alert('Joined (mock)', 'You joined as a group.');
-  const payWithCard = () => Alert.alert('Payment (mock)', 'Card payment flow will open here.');
+  const requireAuthAction = (fn: () => void) => {
+    if (!accessToken) {
+      Alert.alert('Giriş gerekli', 'Bu işlem için giriş yapmalısınız.');
+      // Kullanıcı bu noktada Login’e döndürülmek isterse sadece clearAuth yeterli
+      clearAuth?.(); // AppNavigator otomatik Login/Register akışına alır
+      return;
+    }
+    fn();
+  };
+
+  const joinSolo    = () => requireAuthAction(() => Alert.alert('Joined (mock)', 'Tek kişi katıldın.'));
+  const joinGroup   = () => requireAuthAction(() => Alert.alert('Joined (mock)', 'Grup katılımı yapıldı.'));
+  const payWithCard = () => requireAuthAction(() => Alert.alert('Payment (mock)', 'Kart ödeme akışı açılacak.'));
 
   if (error && !match) {
     return (
       <View style={styles.center}>
         <Text style={{ color: 'red', marginBottom: 12 }}>{error}</Text>
         <Pressable onPress={load} style={styles.retry}>
-          <Text style={{ color: colors.white, fontWeight: '700' }}>Retry</Text>
+          <Text style={{ color: colors.white, fontWeight: '700' }}>Tekrar Dene</Text>
         </Pressable>
       </View>
     );
@@ -99,18 +153,18 @@ export default function MatchDetailScreen({ route }: Props) {
     return (
       <View style={styles.center}>
         <ActivityIndicator color={colors.teal} />
-        <Text style={{ marginTop: 8 }}>Loading…</Text>
+        <Text style={{ marginTop: 8 }}>Yükleniyor…</Text>
       </View>
     );
   }
 
   // Safe guards
-  const ts = match?.matchTimestamp ?? Date.now();
-  const filled = match?.filledSlots ?? 0;
-  const total  = match?.totalSlots ?? 0;
-  const field  = match?.fieldName ?? '';
-  const city   = match?.city ?? '';
-  const price  = match?.pricePerUser ?? 0;
+  const ts    = match?.matchTimestamp ?? Date.now();
+  const filled= match?.filledSlots ?? 0;
+  const total = match?.totalSlots ?? 0;
+  const field = match?.fieldName ?? '';
+  const city  = match?.city ?? '';
+  const price = match?.pricePerUser ?? 0;
 
   return (
     <ScrollView
@@ -144,9 +198,9 @@ export default function MatchDetailScreen({ route }: Props) {
 
         <Text style={styles.price}>{formatTL(price)}</Text>
 
-        <LargeButton title="Bireysel Katıl" onPress={joinSolo} style={{ marginTop: 18 }} />
-        <LargeButton title="Grup Katıl" onPress={joinGroup} style={{ marginTop: 12 }} />
-        <LargeButton title="Kart ile Öde" onPress={payWithCard} style={{ marginTop: 12 }} />
+        <LargeButton title="Bireysel Katıl" onPress={joinSolo}  style={{ marginTop: 18 }} />
+        <LargeButton title="Grup Katıl"     onPress={joinGroup} style={{ marginTop: 12 }} />
+        <LargeButton title="Kart ile Öde"   onPress={payWithCard} style={{ marginTop: 12 }} />
       </View>
     </ScrollView>
   );

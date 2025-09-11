@@ -10,8 +10,8 @@ const api = axios.create({
   timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
-    'Accept': 'application/json'
-  }
+    Accept: 'application/json',
+  },
 });
 
 // ---------- helpers ----------
@@ -23,46 +23,51 @@ function joinUrl(baseURL?: string, url?: string) {
   return u.startsWith('http') ? u : `${b.replace(/\/+$/, '')}/${u.replace(/^\/+/, '')}`;
 }
 
-// Treat any /auth/... path as an auth endpoint
+// /auth, /auth/, /auth/login, /auth/refresh gibi uçları yakalar; /oauth yanlış pozitif olmaz
 function isAuthRequest(config: AxiosRequestConfig) {
   const full = joinUrl(config.baseURL as string, config.url as string);
-  return full.includes('/auth/');
+  return /\/auth(?:\/|$)/.test(full);
 }
 
-// JWT decode helper (payload kısmını base64 decode et)
-function decodeJwt(token: string) {
-  try {
-    const payload = token.split('.')[1];
-    return JSON.parse(payload);
-  } catch {
-    return null;
-  }
-}
+const mask = (t?: string) => (t ? `${t.slice(0, 6)}…${t.slice(-6)}` : '(none)');
 
+// ---------- REQUEST INTERCEPTOR ----------
 api.interceptors.request.use((config) => {
-  // headers'i her durumda initialize et
   config.headers = config.headers || {};
-  config.headers['Content-Type'] = 'application/json';
-  config.headers['Accept'] = 'application/json';
+  (config.headers as any)['Content-Type'] = 'application/json';
+  (config.headers as any)['Accept'] = 'application/json';
 
-  const full = joinUrl(config.baseURL as string, config.url as string);
   const method = (config.method || 'get').toUpperCase();
+  const full = joinUrl(config.baseURL as string, config.url as string);
 
-  // Auth endpointleri hariç token ekle
+  // OPTIONS ve /auth/* için Authorization ekleme
   if (method !== 'OPTIONS' && !isAuthRequest(config)) {
     const { accessToken, tokenType } = useAuthStore.getState();
     if (accessToken) {
-      config.headers['Authorization'] = `${tokenType ?? 'Bearer'} ${accessToken}`;
+      (config.headers as any).Authorization = `${tokenType ?? 'Bearer'} ${accessToken}`;
     }
+  } else if ((config.headers as any).Authorization) {
+    delete (config.headers as any).Authorization;
   }
 
-  // ---- DEBUG ----
-  console.log('[API][REQ]', method, full);
-  console.log('[API][REQ][HEADERS]', config.headers);
+  // ---- DEBUG (masked) ----
+  const authHeader = String((config.headers as any).Authorization || '');
+  const hasAuth = !!authHeader;
+  const masked = hasAuth ? `${authHeader.slice(0, 12)}…${authHeader.slice(-6)}` : '(none)';
+  console.log('[API][REQ]', method, full, 'Auth=', hasAuth ? 'YES' : 'NO');
+  if (hasAuth) console.log('[API][REQ][AUTH]', masked);
+
+  if (config.data) {
+    try {
+      console.log(
+        '[API][REQ][BODY]',
+        typeof config.data === 'string' ? config.data : JSON.stringify(config.data)
+      );
+    } catch {}
+  }
 
   return config;
 });
-
 
 // ---------- RESPONSE + REFRESH FLOW ----------
 let isRefreshing = false;
@@ -70,7 +75,11 @@ let queued: Array<() => void> = [];
 
 api.interceptors.response.use(
   (res: AxiosResponse) => {
-    console.log('[API][RES]', res.status, joinUrl(res.config?.baseURL as string, res.config?.url as string));
+    console.log(
+      '[API][RES]',
+      res.status,
+      joinUrl(res.config?.baseURL as string, res.config?.url as string)
+    );
     return res;
   },
   async (err) => {
@@ -89,121 +98,87 @@ api.interceptors.response.use(
       } catch {}
     }
 
-    // Only handle 401 here
+    // Sadece 401'i burada ele al (403 -> ekranlar karar versin)
     if (!response || status !== 401 || (config as any)?._retry) {
       return Promise.reject(err);
     }
+
+    // Auth endpointleri için refresh deneme yapma
     if (isAuthRequest(config)) {
       return Promise.reject(err);
     }
 
     const { refreshToken } = useAuthStore.getState();
-    
     if (!refreshToken) {
       useAuthStore.getState().clearAuth();
       return Promise.reject(err);
     }
 
-    if (!isRefreshing) {
-      isRefreshing = true;
-
-      try {
-        const res = await axios.post(
-          `${API_BASE_URL}/auth/refresh`,
-          { refreshToken },
-          { headers: { 'Content-Type': 'application/json' } }
-        );
-
-        const {
-          accessToken,
-          refreshToken: newRefreshToken,
-          tokenType = 'Bearer',
-          expiresInMs = 900_000,
-        } = res.data || {};
-
-        if (!accessToken || !newRefreshToken) {
-          throw new Error('Invalid refresh response');
-        }
-
-        useAuthStore.getState().setAuth({
-          accessToken,
-          refreshToken: newRefreshToken,
-          tokenType,
-          expiresInMs,
-        });
-
-        // Retry failed requests
-        config.headers['Authorization'] = `${tokenType} ${accessToken}`;
-        (config as any)._retry = true;
-
-        // Process queued requests
-        queued.forEach((cb) => cb());
-        queued = [];
-
-        return api(config);
-      } catch (refreshError) {
-        useAuthStore.getState().clearAuth();
-        queued.forEach((cb) => cb());
-        queued = [];
-        return Promise.reject(refreshError);
-      } finally {
-        isRefreshing = false;
-      }
-    }
-
-    // Queue the request if refresh is in progress
-    return new Promise((resolve) => {
-      queued.push(() => {
-        const { accessToken, tokenType } = useAuthStore.getState();
-        if (accessToken) {
-          config.headers['Authorization'] = `${tokenType} ${accessToken}`;
-          (config as any)._retry = true;
-          resolve(api(config));
-        } else {
-          resolve(Promise.reject(err));
-        }
-      });
-    });
-    if (!refreshToken) return Promise.reject(err);
-
-    const doRetry = () => {
-      (config as any)._retry = true;
-      console.log('[API][RETRY]', joinUrl(config?.baseURL, config?.url));
-      return api(config);
-    };
-
+    // Zaten refresh oluyorsa -> kuyruğa al
     if (isRefreshing) {
-      return new Promise((resolve, reject) => {
-        queued.push(() => doRetry().then(resolve).catch(reject));
+      return new Promise((resolve) => {
+        queued.push(() => {
+          const { accessToken, tokenType } = useAuthStore.getState();
+          if (accessToken) {
+            (config.headers as any) = (config.headers as any) || {};
+            (config.headers as any).Authorization = `${tokenType ?? 'Bearer'} ${accessToken}`;
+            (config as any)._retry = true;
+            resolve(api(config));
+          } else {
+            resolve(Promise.reject(err));
+          }
+        });
       });
     }
 
+    // Refresh başlat
+    isRefreshing = true;
     try {
-      isRefreshing = true;
       console.log('[API][REFRESH] start');
-
       const resp = await axios.post(
         `${API_BASE_URL?.replace(/\/+$/, '')}/auth/refresh`,
         { refreshToken },
         { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
       );
 
-      const { accessToken: newAccess, refreshToken: newRefresh, tokenType, expiresInMs } = resp.data || {};
+      const {
+        accessToken: newAccess,
+        refreshToken: newRefresh,
+        tokenType = 'Bearer',
+        expiresInMs = 900000,
+      } = resp.data || {};
+
+      if (!newAccess) throw new Error('Invalid refresh response');
+
+      // Store’u güncelle
       useAuthStore.getState().setAuth({
         accessToken: newAccess,
         refreshToken: newRefresh ?? refreshToken,
-        tokenType: tokenType ?? 'Bearer',
-        expiresInMs: expiresInMs ?? 900000,
+        tokenType,
+        expiresInMs,
       });
-      console.log('[API][REFRESH] success');
+      console.log('[API][REFRESH] success', { access: mask(newAccess) });
 
-      queued.forEach((fn) => fn());
+      // Kuyruğu çalıştır
+      const cbs = queued;
       queued = [];
-      return doRetry();
-    } catch (e) {
+      cbs.forEach((cb) => cb());
+
+      // Orijinal isteği tek seferlik retry
+      (config.headers as any) = (config.headers as any) || {};
+      (config.headers as any).Authorization = `${tokenType} ${newAccess}`;
+      (config as any)._retry = true;
+      return api(config);
+    } catch (refreshError) {
       console.log('[API][REFRESH] failed');
       useAuthStore.getState().clearAuth();
-      return Promise.reject(e);
+
+      // Kuyruğu temizle (hepsi başarısız sayılacak)
+      const cbs = queued;
+      queued = [];
+      cbs.forEach((cb) => cb());
+
+      return Promise.reject(refreshError);
     } finally {
       isRefreshing = false;
     }
