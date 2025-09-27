@@ -11,7 +11,7 @@ import { HomeStackParamList } from '../navigation/AppNavigator';
 import { useFocusEffect } from '@react-navigation/native';
 import { getWalletByUser } from '../api/wallets';
 import { useWalletStore } from '../state/walletStore';
-import { getUserProfile } from '../api/profile';
+import { getUserProfile, getMyAvatar } from '../api/profile'; // ⬅️ avatar URL’i de al
 import { useProfileStore } from '../state/profileStore';
 import { useAuthStore } from '../state/authStore';
 import axios from 'axios';
@@ -38,15 +38,16 @@ export default function MatchesListScreen({ navigation }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [errors, setErrors] = useState<ErrorState>({});
 
-  // auth durumu
+  // auth
   const accessToken   = useAuthStore((s) => s.accessToken);
   const refreshToken  = useAuthStore((s) => s.refreshToken);
   const tokenType     = useAuthStore((s) => s.tokenType);
   const clearAuth     = useAuthStore((s) => s.clearAuth);
 
-  // global store setter’ları
+  // global stores
   const setGlobalBalance = useWalletStore.getState().setBalance;
   const setProfileStore  = useProfileStore.getState().setProfile;
+  const setAvatarStore   = useProfileStore.getState().setAvatar;
 
   const reqIdRef = useRef(0);
   const mountedRef = useRef(true);
@@ -55,33 +56,22 @@ export default function MatchesListScreen({ navigation }: Props) {
     return () => { mountedRef.current = false; LOG('unmount'); };
   }, []);
 
-  // token’ı her değiştiğinde maskeli logla
   useEffect(() => {
     LOG('tokens', { access: mask(accessToken), refresh: mask(refreshToken), tokenType });
   }, [accessToken, refreshToken, tokenType]);
 
-  // 401/403 yakalanırsa sadece auth’u temizle (AppNavigator seni Login/Register’a düşürür)
   const handleAuthFail = useCallback((e: unknown) => {
     if (axios.isAxiosError(e)) {
       const code = e.response?.status;
       const url  = e.config?.url || '';
+      if (code === 401) { clearAuth(); return true; }
 
-      // 401 -> refresh sonrasında da 401 ise buraya düşer
-      if (code === 401) {
-        clearAuth();
-        return true;
-      }
-
-      // 403 -> korumalı me endpointleri için auth fail say
       const needsAuth =
         url.includes('/wallets') ||
         url.includes('/transactions') ||
         url.includes('/user-profiles');
 
-      if (code === 403 && needsAuth) {
-        clearAuth();
-        return true;
-      }
+      if (code === 403 && needsAuth) { clearAuth(); return true; }
     }
     return false;
   }, [clearAuth]);
@@ -92,7 +82,6 @@ export default function MatchesListScreen({ navigation }: Props) {
     setLoading(true);
     setErrors({});
 
-    // Access token yoksa ekranda sadece auth’u temizle, navigasyonu AppNavigator yönetsin
     if (!useAuthStore.getState().accessToken) {
       setLoading(false);
       clearAuth();
@@ -100,17 +89,17 @@ export default function MatchesListScreen({ navigation }: Props) {
     }
 
     try {
-      LOG('fetching: matches, wallet/me, profile/me');
-
-      const [mRes, wRes, pRes] = await Promise.allSettled([
+      LOG('fetching: matches, wallet/me, profile/me, avatar');
+      const [mRes, wRes, pRes, aRes] = await Promise.allSettled([
         listMatches(),
         getWalletByUser(),
         getUserProfile(),
+        getMyAvatar(3600), // Drawer’da görünsün diye 1 saatlik signed URL
       ]);
 
       if (!mountedRef.current || reqId !== reqIdRef.current) return;
 
-      // ---- matches ----
+      // matches
       if (mRes.status === 'fulfilled') {
         LOG('matches OK', { count: mRes.value?.length });
         setItems(mRes.value);
@@ -121,7 +110,7 @@ export default function MatchesListScreen({ navigation }: Props) {
         }
       }
 
-      // ---- wallet ----
+      // wallet
       if (wRes.status === 'fulfilled') {
         LOGG('wallet OK', wRes.value);
         setGlobalBalance(wRes.value?.balance ?? 0);
@@ -133,18 +122,30 @@ export default function MatchesListScreen({ navigation }: Props) {
         }
       }
 
-      // ---- profile ----
+      // profile
       if (pRes.status === 'fulfilled') {
         LOGG('profile OK', pRes.value);
         setProfileStore({
-          fullName:  pRes.value.fullName  ?? null,
-          position:  pRes.value.position  ?? null,
-          avatarUrl: pRes.value.avatarUrl ?? null,
+          fullName:   pRes.value.fullName  ?? null,
+          position:   pRes.value.position  ?? null,
+          avatarPath: pRes.value.avatarPath ?? null, // ⬅️ avatarPath’i sakla
+          // avatarUrl UI için ayrı tutuluyor; aRes ile gelecek
         });
       } else {
         LOG('profile ERROR', pRes.reason);
         if (!handleAuthFail(pRes.reason)) {
           setErrors((s) => ({ ...s, profile: getErrMsg(pRes.reason) }));
+        }
+      }
+
+      // avatar signed URL (opsiyonel ama Drawer için faydalı)
+      if (aRes.status === 'fulfilled') {
+        const { path, url } = aRes.value || {};
+        setAvatarStore({ path: path ?? undefined, url: url ?? null });
+      } else {
+        // avatar yoksa sessiz geç
+        if (!handleAuthFail(aRes.reason)) {
+          LOG('avatar WARN', getErrMsg(aRes.reason));
         }
       }
     } finally {
@@ -153,9 +154,8 @@ export default function MatchesListScreen({ navigation }: Props) {
         setLoading(false);
       }
     }
-  }, [setGlobalBalance, setProfileStore, handleAuthFail, clearAuth]);
+  }, [setGlobalBalance, setProfileStore, setAvatarStore, handleAuthFail, clearAuth]);
 
-  // focus olduğunda yükle
   useFocusEffect(
     useCallback(() => {
       LOG('focus -> load()');

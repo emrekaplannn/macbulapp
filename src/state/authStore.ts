@@ -5,8 +5,11 @@ type AuthState = {
   refreshToken: string | null;
   tokenType: 'Bearer' | null;
   expiresInMs: number | null;
+  email: string | null;
+
   setAuth: (p: {
-    accessToken: string; refreshToken: string; tokenType?: 'Bearer'; expiresInMs?: number;
+    accessToken: string; refreshToken: string; tokenType?: 'Bearer'; expiresInMs?: number; email?: string;
+
   }) => void;
   clearAuth: () => void;
 };
@@ -16,7 +19,20 @@ export const useAuthStore = create<AuthState>((set) => ({
   refreshToken: null,
   tokenType: 'Bearer',
   expiresInMs: null,
-  setAuth: ({ accessToken, refreshToken, tokenType = 'Bearer', expiresInMs = 900000 }) =>
-    set({ accessToken, refreshToken, tokenType, expiresInMs }),
-  clearAuth: () => set({ accessToken: null, refreshToken: null, tokenType: 'Bearer', expiresInMs: null }),
+  email: null,
+  setAuth: ({
+    accessToken,
+    refreshToken,
+    tokenType = 'Bearer',
+    expiresInMs = 900000,
+    email = null,
+  }) => set({ accessToken, refreshToken, tokenType, expiresInMs, email }),
+  clearAuth: () =>
+    set({
+      accessToken: null,
+      refreshToken: null,
+      tokenType: 'Bearer',
+      expiresInMs: null,
+      email: null,
+    }),
 }));

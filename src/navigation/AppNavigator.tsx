@@ -15,6 +15,8 @@ import ProfileScreen from '../screens/ProfileScreen';
 import SupportScreen from '../screens/SupportScreen';
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
+import OnboardingAvatarScreen from '../screens/OnboardingAvatarScreen';
+import EmailVerifyScreen from '../screens/EmailVerifyScreen'; // ⬅️ yeni
 
 import CustomDrawerContent from './CustomDrawerContent';
 import { appHeaderOptions } from './headerOptions';
@@ -156,10 +158,12 @@ function AppShell() {
   );
 }
 
-/** ---------- Root (Login/Register -> App) ---------- */
+/** ---------- Root (Auth -> App) ---------- */
 export type RootStackParamList = {
   Login: undefined;
   Register: undefined;
+  EmailVerify: undefined;       // ⬅️ yeni
+  OnboardingAvatar: undefined;  // ⬅️ onboarding akışı
   App: undefined;
 };
 const RootStack = createNativeStackNavigator<RootStackParamList>();
@@ -171,12 +175,15 @@ export default function AppNavigator() {
   return (
     <NavigationContainer>
       <AuthGate>
-        {/* key: auth değişince state’i sıfırla; initialRouteName: doğru yoldan başla */}
         <RootStack.Navigator
           key={isAuthed ? 'app' : 'auth'}
           initialRouteName={isAuthed ? 'App' : 'Login'}
           screenOptions={{ headerShown: false, animationTypeForReplace: 'push' }}
         >
+          {/* Onboarding & Verify ekranları HER ZAMAN mevcut olmalı */}
+          <RootStack.Screen name="EmailVerify" component={EmailVerifyScreen} />
+          <RootStack.Screen name="OnboardingAvatar" component={OnboardingAvatarScreen} />
+
           {isAuthed ? (
             <RootStack.Screen name="App" component={AppShell} />
           ) : (

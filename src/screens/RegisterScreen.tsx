@@ -86,47 +86,50 @@ export default function RegisterScreen({ navigation }: Props) {
   };
 
   const onSubmit = async () => {
-    if (!isValid || loading) return;
-    setLoading(true);
-    try {
-      const payload: RegisterPayload = {
-        email: email.trim().toLowerCase(),
-        password,
-        fullName: name.trim(),
-        position: position ?? null,
-        ...(phone.trim() ? { phone: phone.trim() } : {}), // boşsa gönderme
-      };
+  if (!isValid || loading) return;
+  setLoading(true);
+  try {
+    const payload: RegisterPayload = {
+      email: email.trim().toLowerCase(),
+      password,
+      fullName: name.trim(),
+      position: position ?? null,
+      ...(phone.trim() ? { phone: phone.trim() } : {}), // boşsa gönderme
+    };
 
-      // /auth/register -> api.ts Authorization eklemiyor (isAuthRequest)
-      const resp = await api.post<AuthResponse>('/auth/register', payload);
-      const data = resp.data || {};
+    const resp = await api.post<AuthResponse>('/auth/register', payload);
+    const data = resp.data || {};
 
-      if (!data?.accessToken) {
-        throw new Error('Access token alınamadı.');
-      }
-
-      setAuth({
-        accessToken: data.accessToken,
-        refreshToken: data.refreshToken,
-        tokenType: data.tokenType ?? 'Bearer',
-        expiresInMs: data.expiresInMs ?? 900_000,
-      });
-
-      // UI için opsiyonel profile store
-      setProfile({
-        fullName: payload.fullName ?? null,
-        position: payload.position ?? null,
-        avatarUrl: null,
-      });
-
-    } catch (e: any) {
-      const msg = parseError(e);
-      console.log('[REGISTER][ERR]', msg);
-      Alert.alert('Kayıt başarısız', msg);
-    } finally {
-      if (mountedRef.current) setLoading(false);
+    if (!data?.accessToken) {
+      throw new Error('Access token alınamadı.');
     }
-  };
+
+    setAuth({
+      accessToken: data.accessToken,
+      refreshToken: data.refreshToken,
+      tokenType: data.tokenType ?? 'Bearer',
+      expiresInMs: data.expiresInMs ?? 900_000,
+      email: payload.email,
+    });
+
+    setProfile({
+      fullName: payload.fullName ?? null,
+      position: payload.position ?? null,
+      avatarUrl: null,
+    });
+
+    // ✅ Kayıt başarılı → OnboardingAvatar ekranına yönlendir
+    navigation.replace('EmailVerify');
+
+  } catch (e: any) {
+    const msg = parseError(e);
+    console.log('[REGISTER][ERR]', msg);
+    Alert.alert('Kayıt başarısız', msg);
+  } finally {
+    if (mountedRef.current) setLoading(false);
+  }
+};
+
 
   const onKvkk = () => Alert.alert('KVKK', 'KVKK metni burada gösterilecek.');
   const onPrivacy = () => Alert.alert('Gizlilik Politikası', 'Gizlilik politikası burada gösterilecek.');

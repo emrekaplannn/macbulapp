@@ -69,7 +69,7 @@ export default function LoginScreen({ navigation }: Props) {
 
       if (!accessToken) throw new Error('Access token alınamadı.');
 
-      setAuth({ accessToken, refreshToken, tokenType, expiresInMs });
+      setAuth({ accessToken, refreshToken, tokenType, expiresInMs, email });
       console.log('[LOGIN][OK]');
 
     } catch (e) {

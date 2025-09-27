@@ -1,4 +1,3 @@
-// src/screens/ProfileScreen.tsx
 import React, { useCallback, useState } from 'react';
 import {
   Alert,
@@ -19,6 +18,7 @@ import { colors } from '../theme/colors';
 import {
   getReferralCode,
   getUserProfile,
+  getMyAvatar,
   type ReferralCodeDto,
   type UserProfile,
 } from '../api/profile';
@@ -28,6 +28,8 @@ import { useWalletStore } from '../state/walletStore';
 import { useProfileStore } from '../state/profileStore';
 import { useAuthStore } from '../state/authStore';
 import axios from 'axios';
+import { logoutSafely } from '../lib/session';
+
 
 type Props = NativeStackScreenProps<ProfileStackParamList, 'Profile'>;
 
@@ -48,6 +50,7 @@ export default function ProfileScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null); // signed url burada saklanacak
   const [refCode, setRefCode] = useState<ReferralCodeDto | null>(null);
   const [twoFA, setTwoFA] = useState(false);
   const [errors, setErrors] = useState<ErrorState>({});
@@ -55,17 +58,13 @@ export default function ProfileScreen({ navigation }: Props) {
   const accessToken  = useAuthStore((s) => s.accessToken);
   const clearAuth    = useAuthStore((s) => s.clearAuth);
 
-  // 401/403 (refresh sonrası hâlâ) → sadece auth’u temizle; AppNavigator yönlendirir
   const handleAuthFail = useCallback((e: unknown, from?: string) => {
     if (axios.isAxiosError(e)) {
       const code = e.response?.status;
       const url  = from || e.config?.url || '';
       console.log('[Profile][AUTH?]', { code, url });
 
-      if (code === 401) {
-        clearAuth();
-        return true;
-      }
+      if (code === 401) { clearAuth(); return true; }
 
       const needsAuth =
         url.includes('/wallets') ||
@@ -73,10 +72,7 @@ export default function ProfileScreen({ navigation }: Props) {
         url.includes('/user-profiles') ||
         url.includes('/referral-codes');
 
-      if (code === 403 && needsAuth) {
-        clearAuth();
-        return true;
-      }
+      if (code === 403 && needsAuth) { clearAuth(); return true; }
     }
     return false;
   }, [clearAuth]);
@@ -85,7 +81,6 @@ export default function ProfileScreen({ navigation }: Props) {
     setLoading(true);
     setErrors({});
 
-    // Access yoksa istek atma; AppNavigator akışı üstlenir
     if (!accessToken) {
       setLoading(false);
       clearAuth();
@@ -93,30 +88,30 @@ export default function ProfileScreen({ navigation }: Props) {
     }
 
     try {
-      LOG('fetching: profile/me, referral, wallet/me');
-      const [pRes, rRes, wRes] = await Promise.allSettled([
+      LOG('fetching: profile/me, referral, wallet/me, avatar');
+      const [pRes, rRes, wRes, aRes] = await Promise.allSettled([
         getUserProfile(),
         getReferralCode(),
         getWalletByUser(),
+        getMyAvatar(3600), // 1 saatlik URL
       ]);
 
       // Profile
       if (pRes.status === 'fulfilled') {
-        setProfile(pRes.value);
-        const { fullName, position, avatarUrl } = pRes.value || {};
-        useProfileStore
-          .getState()
-          .setProfile({
-            fullName: fullName ?? null,
-            position: position ?? null,
-            avatarUrl: avatarUrl ?? null,
-          });
+        const p = pRes.value;
+        setProfile(p);
+
+        // Store’a UI için (hala avatarUrl alanı bekleyen yerler olabilir)
+        useProfileStore.getState().setProfile({
+          fullName: p.fullName ?? null,
+          position: p.position ?? null,
+          avatarUrl: null, // signed URL'yi ayrı state’te tutuyoruz
+        });
       } else {
         if (!handleAuthFail(pRes.reason, '/user-profiles/me')) {
-          console.error('UserProfile failed:', pRes.reason);
           setErrors((s) => ({ ...s, profile: `Profil bilgileri alınamadı: ${getErrMsg(pRes.reason)}` }));
         } else {
-          return; // auth fail -> UI üstte yönlenir
+          return;
         }
       }
 
@@ -125,7 +120,6 @@ export default function ProfileScreen({ navigation }: Props) {
         setRefCode(rRes.value ?? null);
       } else {
         if (!handleAuthFail(rRes.reason, '/referral-codes/user-actives')) {
-          console.warn('Referral code failed:', rRes.reason);
           setErrors((s) => ({ ...s, referral: `Referans kodu alınamadı: ${getErrMsg(rRes.reason)}` }));
         } else {
           return;
@@ -139,16 +133,34 @@ export default function ProfileScreen({ navigation }: Props) {
         setGlobalBalance(b);
       } else {
         if (!handleAuthFail(wRes.reason, '/wallets/user')) {
-          console.warn('Wallet failed:', wRes.reason);
           setGlobalBalance(null);
           setErrors((s) => ({ ...s, wallet: `Cüzdan bilgisi alınamadı: ${getErrMsg(wRes.reason)}` }));
         } else {
           return;
         }
       }
+
+      // Avatar (signed URL)
+      if (aRes.status === 'fulfilled') {
+        const url = aRes.value?.url || null;
+        setAvatarUrl(url);
+        // istersen store’a da koyabilirsin:
+        useProfileStore.getState().setProfile({
+          fullName: useProfileStore.getState().fullName ?? null,
+          position: useProfileStore.getState().position ?? null,
+          avatarUrl: url,
+        });
+      } else {
+        // avatar yoksa sorun değil; fallback gösterilecek
+        if (!handleAuthFail(aRes.reason, '/profile/avatar')) {
+          console.log('[Profile] Avatar not available:', getErrMsg(aRes.reason));
+          setAvatarUrl(null);
+        } else {
+          return;
+        }
+      }
     } catch (e) {
       if (!handleAuthFail(e)) {
-        console.error(e);
         setErrors({
           profile:  `Yükleme başarısız: ${getErrMsg(e)}`,
           referral: `Yükleme başarısız: ${getErrMsg(e)}`,
@@ -161,11 +173,7 @@ export default function ProfileScreen({ navigation }: Props) {
     }
   }, [accessToken, handleAuthFail, setGlobalBalance, clearAuth]);
 
-  useFocusEffect(
-    useCallback(() => {
-      load();
-    }, [load])
-  );
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -190,22 +198,12 @@ export default function ProfileScreen({ navigation }: Props) {
   const logout = () => {
     Alert.alert('Çıkış', 'Hesabınızdan çıkış yapmak istiyor musunuz?', [
       { text: 'İptal', style: 'cancel' },
-      {
-        text: 'Evet',
-        style: 'destructive',
-        onPress: () => {
-          // global store’ları temizle
-          useWalletStore.getState().clear?.();
-          useProfileStore.getState().clear?.();
-          useAuthStore.getState().clearAuth(); // 🔑 auth temizle
-          // Navigasyonu AppNavigator yönetecek (key değişimi ile)
-        },
-      },
+      { text: 'Evet', style: 'destructive', onPress: logoutSafely },
     ]);
   };
 
   const avatar =
-    profile?.avatarUrl ||
+    avatarUrl ||
     `https://ui-avatars.com/api/?name=${encodeURIComponent(profile?.fullName || 'Guest')}&background=0D8ABC&color=fff`;
 
   const anyError = errors.profile || errors.referral || errors.wallet;

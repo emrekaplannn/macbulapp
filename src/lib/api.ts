@@ -1,4 +1,4 @@
-// api.ts
+// src/lib/api.ts
 import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
 import { useAuthStore } from '../state/authStore';
 import Config from 'react-native-config';
@@ -9,12 +9,13 @@ const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 15000,
   headers: {
+    // Buradaki header'lar default; interceptor FormData için override etmeyecek
     'Content-Type': 'application/json',
     Accept: 'application/json',
   },
 });
 
-// ---------- helpers ----------
+/** ---------- helpers ---------- */
 function joinUrl(baseURL?: string, url?: string) {
   const b = baseURL || '';
   const u = url || '';
@@ -29,13 +30,30 @@ function isAuthRequest(config: AxiosRequestConfig) {
   return /\/auth(?:\/|$)/.test(full);
 }
 
+// RN FormData tespiti (polyfill'li ortamlarda instanceof çalışmayabilir)
+function isRNFormData(data: any): boolean {
+  if (typeof FormData !== 'undefined' && data instanceof FormData) return true;
+  // RN FormData polyfili: {_parts: [...]}
+  return !!data && typeof data === 'object' && Array.isArray((data as any)._parts);
+}
+
 const mask = (t?: string) => (t ? `${t.slice(0, 6)}…${t.slice(-6)}` : '(none)');
 
-// ---------- REQUEST INTERCEPTOR ----------
+/** ---------- REQUEST INTERCEPTOR ---------- */
 api.interceptors.request.use((config) => {
   config.headers = config.headers || {};
-  (config.headers as any)['Content-Type'] = 'application/json';
-  (config.headers as any)['Accept'] = 'application/json';
+
+  // Eğer FormData ise Content-Type'ı ELLEME
+  const looksLikeFormData = isRNFormData(config.data);
+  const contentTypeHeader = String((config.headers as any)['Content-Type'] || (config.headers as any)['content-type'] || '');
+
+  if (looksLikeFormData || contentTypeHeader.toLowerCase().startsWith('multipart/form-data')) {
+    // RN boundary otomatik ekler; Accept'i istersen bırakabilirsin
+    // Content-Type'ı kesinlikle override ETME
+  } else {
+    (config.headers as any)['Content-Type'] = 'application/json';
+    (config.headers as any)['Accept'] = 'application/json';
+  }
 
   const method = (config.method || 'get').toUpperCase();
   const full = joinUrl(config.baseURL as string, config.url as string);
@@ -59,17 +77,24 @@ api.interceptors.request.use((config) => {
 
   if (config.data) {
     try {
-      console.log(
-        '[API][REQ][BODY]',
-        typeof config.data === 'string' ? config.data : JSON.stringify(config.data)
-      );
-    } catch {}
+      if (looksLikeFormData) {
+        const parts = (config.data as any)._parts;
+        console.log('[API][REQ][BODY] FormData parts=', Array.isArray(parts) ? parts.length : 'unknown');
+      } else {
+        console.log(
+          '[API][REQ][BODY]',
+          typeof config.data === 'string' ? config.data : JSON.stringify(config.data)
+        );
+      }
+    } catch {
+      // swallow
+    }
   }
 
   return config;
 });
 
-// ---------- RESPONSE + REFRESH FLOW ----------
+/** ---------- RESPONSE + REFRESH FLOW ---------- */
 let isRefreshing = false;
 let queued: Array<() => void> = [];
 
