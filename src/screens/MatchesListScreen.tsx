@@ -5,13 +5,13 @@ import {
   RefreshControl, Alert, Pressable
 } from 'react-native';
 import { colors } from '../theme/colors';
-import { listMatches, Match } from '../api/matches';
+import { listMatches, getMatchSlots, type Match, type MatchSlots } from '../api/matches';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { HomeStackParamList } from '../navigation/AppNavigator';
 import { useFocusEffect } from '@react-navigation/native';
 import { getWalletByUser } from '../api/wallets';
 import { useWalletStore } from '../state/walletStore';
-import { getUserProfile, getMyAvatar } from '../api/profile'; // ⬅️ avatar URL’i de al
+import { getUserProfile, getMyAvatar } from '../api/profile';
 import { useProfileStore } from '../state/profileStore';
 import { useAuthStore } from '../state/authStore';
 import axios from 'axios';
@@ -99,10 +99,35 @@ export default function MatchesListScreen({ navigation }: Props) {
 
       if (!mountedRef.current || reqId !== reqIdRef.current) return;
 
-      // matches
+      // matches (+ slots merge)
       if (mRes.status === 'fulfilled') {
-        LOG('matches OK', { count: mRes.value?.length });
-        setItems(mRes.value);
+        const matches = mRes.value;
+        LOG('matches OK', { count: matches?.length });
+
+        // Her maç için slot bilgisi (paidCount/totalSlots)
+        const slotResults = await Promise.allSettled(
+          matches.map((m) => getMatchSlots(m.id))
+        );
+
+        const slotsMap = new Map<string, MatchSlots>();
+        slotResults.forEach((res) => {
+          if (res.status === 'fulfilled') {
+            slotsMap.set(res.value.matchId, res.value);
+          } else {
+            LOG('slots ERROR (ignored)', getErrMsg(res.reason));
+          }
+        });
+
+        const withSlots: Match[] = matches.map((m) => {
+          const s = slotsMap.get(m.id);
+          return {
+            ...m,
+            totalSlots: s?.totalSlots ?? m.totalSlots ?? 0,
+            filledSlots: s ? s.paidCount : (m.filledSlots ?? 0), // slot bilgisi varsa kesinlikle paidCount'u kullan
+          };
+        });
+
+        setItems(withSlots);
       } else {
         LOG('matches ERROR', mRes.reason);
         if (!handleAuthFail(mRes.reason)) {
@@ -126,10 +151,9 @@ export default function MatchesListScreen({ navigation }: Props) {
       if (pRes.status === 'fulfilled') {
         LOGG('profile OK', pRes.value);
         setProfileStore({
-          fullName:   pRes.value.fullName  ?? null,
-          position:   pRes.value.position  ?? null,
-          avatarPath: pRes.value.avatarPath ?? null, // ⬅️ avatarPath’i sakla
-          // avatarUrl UI için ayrı tutuluyor; aRes ile gelecek
+          fullName:   pRes.value.fullName   ?? null,
+          position:   pRes.value.position   ?? null,
+          avatarPath: pRes.value.avatarPath ?? null,
         });
       } else {
         LOG('profile ERROR', pRes.reason);
@@ -138,12 +162,11 @@ export default function MatchesListScreen({ navigation }: Props) {
         }
       }
 
-      // avatar signed URL (opsiyonel ama Drawer için faydalı)
+      // avatar signed URL (opsiyonel)
       if (aRes.status === 'fulfilled') {
         const { path, url } = aRes.value || {};
         setAvatarStore({ path: path ?? undefined, url: url ?? null });
       } else {
-        // avatar yoksa sessiz geç
         if (!handleAuthFail(aRes.reason)) {
           LOG('avatar WARN', getErrMsg(aRes.reason));
         }

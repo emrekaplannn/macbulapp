@@ -1,4 +1,3 @@
-// src/screens/MatchDetailScreen.tsx
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, Image, Alert, ScrollView,
@@ -8,7 +7,7 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { HomeStackParamList } from '../navigation/AppNavigator';
 import { colors } from '../theme/colors';
 import { formatDate, formatTime, formatTL } from '../utils/format';
-import { getMatchById, Match } from '../api/matches';
+import { getMatchById, getMatchSlots, Match, MatchSlots } from '../api/matches';
 import LargeButton from '../components/LargeButton';
 import Icon from 'react-native-vector-icons/Feather';
 import { useFocusEffect } from '@react-navigation/native';
@@ -31,21 +30,19 @@ export default function MatchDetailScreen({ route }: Props) {
   const { id } = route.params;
 
   const [match, setMatch] = useState<Match | null>(null);
+  const [slots, setSlots] = useState<MatchSlots | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // stores
   const setGlobalBalance = useWalletStore.getState().setBalance;
   const clearAuth       = useAuthStore((s) => s.clearAuth);
   const accessToken     = useAuthStore((s) => s.accessToken);
 
-  // stale/unmount guards
   const reqIdRef = useRef(0);
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
-  // 401/403 (refresh sonrası) -> sadece auth’u temizle; AppNavigator login akışına düşürür
   const handleAuthFail = useCallback((e: unknown, fromUrl?: string) => {
     if (axios.isAxiosError(e)) {
       const code = e.response?.status;
@@ -55,13 +52,10 @@ export default function MatchDetailScreen({ route }: Props) {
         clearAuth?.();
         return true;
       }
-
-      // 403 ise yalnızca korumalı me uçları için auth fail say
       const needsAuth =
         url.includes('/wallets') ||
         url.includes('/transactions') ||
         url.includes('/user-profiles');
-
       if (code === 403 && needsAuth) {
         clearAuth?.();
         return true;
@@ -74,37 +68,34 @@ export default function MatchDetailScreen({ route }: Props) {
     const reqId = ++reqIdRef.current;
     setLoading(true);
     setError(null);
-
     try {
-      // her zaman: maç public
       const matchPromise = getMatchById(id);
-
-      // sadece access varsa: cüzdan
+      const slotsPromise = getMatchSlots(id);
       const walletPromise = accessToken ? getWalletByUser() : Promise.resolve(null as any);
 
-      const [mRes, wRes] = await Promise.allSettled([matchPromise, walletPromise]);
-
+      const [mRes, sRes, wRes] = await Promise.allSettled([matchPromise, slotsPromise, walletPromise]);
       if (!mountedRef.current || reqId !== reqIdRef.current) return;
 
-      // match
       if (mRes.status === 'fulfilled') {
         setMatch(mRes.value);
       } else {
         setError(`Maç bilgisi alınamadı: ${getErrMsg(mRes.reason)}`);
       }
 
-      // wallet
+      if (sRes.status === 'fulfilled') {
+        setSlots(sRes.value);
+      } else {
+        console.log('[Slots] alınamadı:', getErrMsg(sRes.reason));
+        setSlots(null);
+      }
+
       if (wRes.status === 'fulfilled') {
         if (wRes.value) {
           const b = Number.isFinite(wRes.value?.balance) ? wRes.value.balance : 0;
           setGlobalBalance(b);
-        } else {
-          setGlobalBalance(null);
-        }
+        } else setGlobalBalance(null);
       } else {
-        if (!handleAuthFail(wRes.reason, '/wallets/user')) {
-          setGlobalBalance(null); // sessiz düş
-        }
+        if (!handleAuthFail(wRes.reason, '/wallets/user')) setGlobalBalance(null);
       }
     } catch (e) {
       if (!mountedRef.current || reqId !== reqIdRef.current) return;
@@ -127,16 +118,15 @@ export default function MatchDetailScreen({ route }: Props) {
   const requireAuthAction = (fn: () => void) => {
     if (!accessToken) {
       Alert.alert('Giriş gerekli', 'Bu işlem için giriş yapmalısınız.');
-      // Kullanıcı bu noktada Login’e döndürülmek isterse sadece clearAuth yeterli
-      clearAuth?.(); // AppNavigator otomatik Login/Register akışına alır
+      clearAuth?.();
       return;
     }
     fn();
   };
 
-  const joinSolo    = () => requireAuthAction(() => Alert.alert('Joined (mock)', 'Tek kişi katıldın.'));
-  const joinGroup   = () => requireAuthAction(() => Alert.alert('Joined (mock)', 'Grup katılımı yapıldı.'));
-  const payWithCard = () => requireAuthAction(() => Alert.alert('Payment (mock)', 'Kart ödeme akışı açılacak.'));
+  const joinSolo    = () => requireAuthAction(() => Alert.alert('Katıldın', 'Bireysel katılım başarıyla eklenecek.'));
+  const joinGroup   = () => requireAuthAction(() => Alert.alert('Katıldınız', 'Grup katılımı başarıyla eklenecek.'));
+  const payWithCard = () => requireAuthAction(() => Alert.alert('Ödeme', 'Kart ödeme akışı açılacak.'));
 
   if (error && !match) {
     return (
@@ -158,13 +148,14 @@ export default function MatchDetailScreen({ route }: Props) {
     );
   }
 
-  // Safe guards
   const ts    = match?.matchTimestamp ?? Date.now();
-  const filled= match?.filledSlots ?? 0;
-  const total = match?.totalSlots ?? 0;
   const field = match?.fieldName ?? '';
   const city  = match?.city ?? '';
   const price = match?.pricePerUser ?? 0;
+
+  const filled = slots?.paidCount ?? 0;
+  const total  = slots?.totalSlots ?? 0;
+  const isFull = slots?.full ?? false;
 
   return (
     <ScrollView
@@ -193,14 +184,33 @@ export default function MatchDetailScreen({ route }: Props) {
         </View>
 
         <Text style={styles.city}>{city}</Text>
-
         <View style={styles.divider} />
-
         <Text style={styles.price}>{formatTL(price)}</Text>
 
-        <LargeButton title="Bireysel Katıl" onPress={joinSolo}  style={{ marginTop: 18 }} />
-        <LargeButton title="Grup Katıl"     onPress={joinGroup} style={{ marginTop: 12 }} />
-        <LargeButton title="Kart ile Öde"   onPress={payWithCard} style={{ marginTop: 12 }} />
+        <LargeButton
+          title="Bireysel Katıl"
+          onPress={joinSolo}
+          disabled={isFull}
+          style={{ marginTop: 18, opacity: isFull ? 0.5 : 1 }}
+        />
+        <LargeButton
+          title="Grup Katıl"
+          onPress={joinGroup}
+          disabled={isFull}
+          style={{ marginTop: 12, opacity: isFull ? 0.5 : 1 }}
+        />
+        <LargeButton
+          title="Kart ile Öde"
+          onPress={payWithCard}
+          disabled={isFull}
+          style={{ marginTop: 12, opacity: isFull ? 0.5 : 1 }}
+        />
+
+        {isFull && (
+          <Text style={{ textAlign: 'center', marginTop: 8, color: 'red', fontWeight: '700' }}>
+            Maç kontenjanı dolu
+          </Text>
+        )}
       </View>
     </ScrollView>
   );
