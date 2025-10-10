@@ -1,15 +1,6 @@
 // src/api/matches.ts
 import api from '../lib/api';
 
-export type Match = {
-  id: string;
-  fieldName: string;
-  city: string;
-  matchTimestamp: number;
-  pricePerUser: number;
-  totalSlots?: number;
-  filledSlots?: number;     // ✅ eklendi
-};
 
 export type MatchSlots = {
   matchId: string;
@@ -19,8 +10,21 @@ export type MatchSlots = {
   full: boolean;
 };
 
-export async function listMatches(): Promise<Match[]> {
-  const { data } = await api.get('/matches');           // ⬅️ baseURL’in /v1 içermiyorsa bunu kullan
+export type Match = {
+  id: string;
+  fieldName: string;
+  city: string;
+  matchTimestamp: number;
+  pricePerUser: number;
+  totalSlots?: number;
+  filledSlots?: number;
+  isUserJoined?: boolean; // ✅
+};
+
+export async function listMatches(fromTs?: number): Promise<Match[]> {
+  const { data } = await api.post('/matches/list-filtered', {
+    fromTimestamp: fromTs ?? Date.now(),
+  });
   return data;
 }
 

@@ -16,6 +16,9 @@ export default function MatchCard({ match, onJoin, onPress }: Props) {
   const filled = match.filledSlots ?? 0;
   const total  = match.totalSlots ?? 0;
   const isFull = total > 0 && filled >= total;
+  const isJoined = !!match.isUserJoined;
+
+  const joinDisabled = isFull || isJoined;
 
   return (
     <Pressable onPress={() => onPress?.(match.id)} style={styles.card}>
@@ -28,6 +31,7 @@ export default function MatchCard({ match, onJoin, onPress }: Props) {
         <Text style={styles.field}>{match.fieldName}</Text>
         <View style={styles.slotsWrap}>
           {isFull && <Text style={styles.fullBadge}>DOLU</Text>}
+          {isJoined && <Text style={styles.joinedBadge}>KATILDIN</Text>}
           <Icon name="user" size={14} color={colors.gray600} style={styles.slotsIcon} />
           <Text style={styles.slotsText}>
             {total > 0 ? `${filled}/${total}` : '—'}
@@ -43,12 +47,18 @@ export default function MatchCard({ match, onJoin, onPress }: Props) {
       <View style={styles.rowBottom}>
         <Text style={styles.price}>{formatTL(match.pricePerUser)}</Text>
         <Pressable
-          onPress={isFull ? undefined : () => onJoin(match.id)}
-          disabled={isFull}
-          style={[styles.joinBtn, isFull && styles.joinBtnDisabled]}
-          accessibilityState={{ disabled: isFull }}
+          onPress={joinDisabled ? undefined : () => onJoin(match.id)}
+          disabled={joinDisabled}
+          style={[
+            styles.joinBtn,
+            joinDisabled && styles.joinBtnDisabled,
+            isJoined && styles.joinBtnJoined,
+          ]}
+          accessibilityState={{ disabled: joinDisabled }}
         >
-          <Text style={styles.joinText}>{isFull ? 'Kontenjan dolu' : 'Katıl'}</Text>
+          <Text style={styles.joinText}>
+            {isFull ? 'Kontenjan dolu' : isJoined ? 'Katıldın' : 'Katıl'}
+          </Text>
         </Pressable>
       </View>
     </Pressable>
@@ -91,6 +101,16 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginRight: 8,
   },
+  joinedBadge: {
+    backgroundColor: '#e0f2f1',
+    color: '#00695C',
+    fontWeight: '800',
+    fontSize: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
+    marginRight: 8,
+  },
   slotsIcon: { marginRight: 4 },
   slotsText: { fontSize: 14, color: colors.gray600, fontWeight: '600' },
 
@@ -106,6 +126,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
   },
-  joinBtnDisabled: { opacity: 0.5 },
+  joinBtnDisabled: { opacity: 0.6 },
+  joinBtnJoined: { backgroundColor: '#00796B' }, // Katıldıysa biraz koyu yeşil
   joinText: { color: colors.white, fontWeight: '700' },
 });
